@@ -4,23 +4,17 @@ version = "0.1.0"
 edition = "2024"
 license = "BSD-3-Clause"
 description = "DROIDSAW Hermes bytecode parser and decompiler for React Native. 21 CLI commands, 239 tests, 1.4M production functions validated. Covers v40–v100."
-readme = "README.md"
 repository = "https://github.com/droidsaw/droidsaw-hermes"
 homepage = "https://droidsaw.com"
 keywords = ["hermes", "react-native", "bytecode", "decompiler", "reverse-engineering"]
-categories = ["command-line-utilities", "development-tools"]
+categories = ["development-tools", "parser-implementations"]
 
 [lib]
 name = "droidsaw_hermes"
 path = "src/lib.rs"
 
-[[bin]]
-name = "droidsaw-hermes"
-path = "src/main.rs"
-
 [dependencies]
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
 droidsaw-common = "0.1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
