@@ -1,0 +1,11 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r3_13 = globalThis.tag`has \`backtick and \${literal}${42}ends with \\`;
+	var r3_14 = globalThis.print(r3_13);
+	return r3_14;
+}
+// ==hermes-fixture-function== 1
+function tag(a0, a1) {
+	var r1_4 = a0.raw.join("|");
+	return r1_4 + "@" + a1;
+}

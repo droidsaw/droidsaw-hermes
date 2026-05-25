@@ -1,0 +1,23 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r1_4 = globalThis.makeCounter();
+	var r3_6 = r1_4();
+	var r3_7 = globalThis.print(r3_6);
+	var r3_9 = r1_4();
+	var r3_10 = globalThis.print(r3_9);
+	var r1_12 = r1_4();
+	var r1_13 = globalThis.print(r1_12);
+	return r1_13;
+}
+// ==hermes-fixture-function== 1
+function makeCounter() {
+	var r1_0 = _env;
+	r1_0["slot[0]"] = 0;
+	return null;
+}
+// ==hermes-fixture-function== 2
+() => {
+	var r0_3 = _closure0_slot0 + 1;
+	_parentEnv["slot[0]"] = r0_3;
+	return r0_3;
+};

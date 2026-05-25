@@ -1,0 +1,39 @@
+// ==hermes-fixture-function== 0
+function global() {
+	globalThis.o = {};
+	globalThis.o[Symbol.iterator] = null;
+	var r3 = globalThis.o[Symbol.iterator]();
+	var r1_10 = globalThis.o;
+	while (r3 === undefined) {
+		globalThis.x = r3.next();
+		var print = globalThis.print;
+		var x = globalThis.x;
+		var r4_19 = print(x);
+		continue;
+	}
+	var r0_24 = globalThis.print(typeof Symbol.iterator);
+	return r0_24;
+}
+// ==hermes-fixture-function== 1
+() => {
+	var r2_0 = _env;
+	r2_0["slot[0]"] = 0;
+	var r1_2 = { next: null };
+	var next = null;
+	r1_2.next = next;
+	return r1_2;
+};
+// ==hermes-fixture-function== 2
+function next() {
+	var r1_1 = _closure0_slot0;
+	if (r1_1 < 3) {
+		var r2_4 = {
+			value: r1_1,
+			done: false
+		};
+		var r0_5 = 1;
+		var r0_6 = r1_1 + r0_5;
+		_parentEnv["slot[0]"] = r0_6;
+		return r2_4;
+	} else {}
+}

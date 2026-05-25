@@ -1,0 +1,10 @@
+stage: cfg (debug_assert fires inside Cfg::build, before SSA construction)
+panic: "catch handler must appear after all its try-region blocks in RPO"
+site: src/decompile/cfg.rs:441:13
+repro: cargo fuzz run fuzz_ssa fuzz/crashes/fuzz_ssa/0cfc3d8e2713
+
+Same root cause as `fuzz_cfg/515ce46d6dac`: Invariant 7 violation in
+`Cfg::build`'s post-order fixup. fuzz_ssa routes through the same
+CFG construction before touching the SSA builder, so this target
+surfaces the same bug class first. Both inputs are consumed by the
+fix that converts the debug_assert into a typed Err.

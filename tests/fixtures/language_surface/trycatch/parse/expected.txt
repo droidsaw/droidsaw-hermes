@@ -1,0 +1,13 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r2_6 = globalThis.safeParse("{\"x\":1}");
+	var r2_8 = globalThis.print(r2_6.x);
+	var r1_12 = globalThis.safeParse("not json");
+	var r1_13 = globalThis.print(r1_12);
+	return r1_13;
+}
+// ==hermes-fixture-function== 1
+function safeParse(a0) {
+	var r0_4 = JSON.parse(a0);
+	return r0_4;
+}

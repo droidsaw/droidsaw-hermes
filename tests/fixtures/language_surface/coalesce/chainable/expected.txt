@@ -1,0 +1,13 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r0_1 = 42;
+	globalThis.x = r0_1;
+	var r3_5 = globalThis.print(globalThis.x);
+	globalThis.x = r0_1;
+	var r3_8 = globalThis.print(globalThis.x);
+	globalThis.x = r0_1;
+	var r3_11 = globalThis.print(globalThis.x);
+	globalThis.x = r0_1;
+	var r2_14 = globalThis.print(globalThis.x);
+	return r2_14;
+}

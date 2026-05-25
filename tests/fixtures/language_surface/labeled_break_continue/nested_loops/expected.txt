@@ -1,0 +1,73 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r0 = 0;
+	globalThis.i = r0;
+	var r3 = 3;
+	var r2 = 1;
+	var r1 = 2;
+	var r7 = ",";
+	if (globalThis.i < r3) {
+		globalThis.j = r0;
+		var j = globalThis.j;
+		L0: while (j >= r3) {
+			var i = globalThis.i;
+			var r6_33 = i + 1;
+			globalThis.i = r6_33;
+			i = globalThis.i;
+			if (i < r3) {
+				continue;
+			} else {
+				break;
+			}
+			i = globalThis.i;
+			while (i !== r2) {
+				j = globalThis.j;
+				if (j === r1) {
+					continue L0;
+				} else {
+					var print = globalThis.print;
+					i = globalThis.i;
+					var r9_22 = i + r7;
+					j = globalThis.j;
+					var r6_24 = r9_22 + j;
+					var r6_26 = print(r6_24);
+					j = globalThis.j;
+					var r6_28 = j + 1;
+					globalThis.j = r6_28;
+					j = globalThis.j;
+					if (j < r3) {
+						continue;
+					} else {
+						continue L0;
+					}
+				}
+				j = globalThis.j;
+				if (j === r2) {
+					break L0;
+				}
+			}
+		}
+	}
+	globalThis.k = r0;
+	r0 = 5;
+	if (globalThis.k < r0) {
+		var k = globalThis.k;
+		while (k === r3) {
+			k = globalThis.k;
+			var r6_44 = k + 1;
+			globalThis.k = r6_44;
+			k = globalThis.k;
+			if (k < r0) {
+				continue;
+			} else {
+				break;
+			}
+		}
+		print = globalThis.print;
+		k = globalThis.k;
+		var r6_50 = "found:" + k;
+		var r6_52 = print(r6_50);
+	}
+	var r5_62 = globalThis.print("after");
+	return r5_62;
+}

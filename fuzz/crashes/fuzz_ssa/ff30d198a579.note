@@ -1,0 +1,7 @@
+stage: ssa (libFuzzer OOM, process RSS exceeded 2048 MB before the run could complete)
+class: OOM
+site: unknown (amplification on `Cfg::build` → `build_ssa` path)
+repro: cargo fuzz run fuzz_ssa fuzz/crashes/fuzz_ssa/ff30d198a579 -- -rss_limit_mb=4096
+
+Smallest of the 4 OOMs (291 bytes) — best reduction candidate for
+`cargo fuzz tmin` when the amplification site is bisected.

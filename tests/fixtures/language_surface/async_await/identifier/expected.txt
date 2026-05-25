@@ -1,0 +1,10 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r2_6 = globalThis.foo(1);
+	var r2_7 = globalThis.print(r2_6);
+	return r2_7;
+}
+// ==hermes-fixture-function== 1
+function foo(a0) {
+	return a0;
+}

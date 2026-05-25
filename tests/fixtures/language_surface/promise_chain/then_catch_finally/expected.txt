@@ -1,0 +1,69 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r5_4 = Promise.resolve(1);
+	var r5_8 = r5_4.then(
+		null
+		/* closure #1 */
+	);
+	var r5_11 = r5_8.then(
+		null
+		/* closure #2 */
+	);
+	var r5_14 = r5_11.catch(
+		null
+		/* closure #3 */
+	);
+	var r3_17 = r5_14.finally(
+		null
+		/* closure #4 */
+	);
+	var r4_21 = Promise.reject("boom");
+	var r4_24 = r4_21.then(
+		null
+		/* closure #5 */
+	);
+	var r4_27 = r4_24.catch(
+		null
+		/* closure #6 */
+	);
+	var r2_30 = r4_27.finally(
+		null
+		/* closure #7 */
+	);
+	return r2_30;
+}
+// ==hermes-fixture-function== 1
+(a0) => {
+	var r3_6 = globalThis.print("then1:" + a0);
+	return a0 + 1;
+};
+// ==hermes-fixture-function== 2
+(a0) => {
+	var r3_6 = globalThis.print("then2:" + a0);
+	return a0 + 1;
+};
+// ==hermes-fixture-function== 3
+(a0) => {
+	var r1_6 = globalThis.print("catch:" + a0);
+	return undefined;
+};
+// ==hermes-fixture-function== 4
+() => {
+	var r1_4 = globalThis.print("finally");
+	return undefined;
+};
+// ==hermes-fixture-function== 5
+(a0) => {
+	var r1_6 = globalThis.print("skip:" + a0);
+	return undefined;
+};
+// ==hermes-fixture-function== 6
+(a0) => {
+	var r1_6 = globalThis.print("caught:" + a0);
+	return undefined;
+};
+// ==hermes-fixture-function== 7
+() => {
+	var r1_4 = globalThis.print("done");
+	return undefined;
+};

@@ -1,0 +1,17 @@
+---
+source: droidsaw-hermes/tests/parse_typed_errors.rs
+assertion_line: 64
+expression: err
+---
+InvalidMagic {
+    found: [
+        78,
+        79,
+        84,
+        72,
+        69,
+        82,
+        77,
+        83,
+    ],
+}

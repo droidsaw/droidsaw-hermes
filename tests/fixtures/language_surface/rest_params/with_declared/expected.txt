@@ -1,0 +1,35 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r0_5 = 2;
+	var r1_6 = 1;
+	var r7_7 = globalThis.sum(r1_6, r0_5);
+	var r7_8 = globalThis.print(r7_7);
+	var r2_11 = 3;
+	var r7_12 = globalThis.sum(r1_6, r0_5, r2_11);
+	var r7_13 = globalThis.print(r7_12);
+	var r6_22 = globalThis.sum(r1_6, r0_5, r2_11, 4, 5);
+	var r6_23 = globalThis.print(r6_22);
+	return r6_23;
+}
+// ==hermes-fixture-function== 1
+function sum(a0, a1, ...r7) {
+	var r6 = a0 + a1;
+	var r0 = 0;
+	var r1 = 1;
+	var r4_19 = r6;
+	if (r0 < r7.length) {
+		var r5_12 = r7[r0];
+		r6 = r6 + r5_12;
+		r0 = r0 + r1;
+		var length = r7.length;
+		r4_19 = r6;
+		while (r0 < length) {
+			r5_12 = r7[r0];
+			r6 = r6 + r5_12;
+			r0 = r0 + r1;
+			length = r7.length;
+			r4_19 = r6;
+		}
+	}
+	return r4_19;
+}

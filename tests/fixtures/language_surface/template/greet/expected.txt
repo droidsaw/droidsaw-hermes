@@ -1,0 +1,11 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r2_7 = globalThis.greet("fox", 3);
+	var r2_8 = globalThis.print(r2_7);
+	return r2_8;
+}
+// ==hermes-fixture-function== 1
+function greet(a0, a1) {
+	var r0_8 = globalThis.HermesInternal.concat.call("hello ", a0, ", you have ", a1, " messages");
+	return r0_8;
+}

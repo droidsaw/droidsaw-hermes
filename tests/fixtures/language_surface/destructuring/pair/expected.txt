@@ -1,0 +1,18 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r1_5 = globalThis.swap({
+		a: 1,
+		b: 2
+	});
+	var r3_8 = globalThis.print(r1_5.a);
+	var r1_11 = globalThis.print(r1_5.b);
+	return r1_11;
+}
+// ==hermes-fixture-function== 1
+function swap(opts) {
+	var r0_3 = {
+		a: opts.b,
+		b: opts.a
+	};
+	return r0_3;
+}

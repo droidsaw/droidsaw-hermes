@@ -1,0 +1,217 @@
+version = 1
+
+[[fixture]]
+name = "function_hello"
+source = "function/hello/src.js"
+status = "compile_pass"
+expected_stdout = "function/hello/expected.txt"
+
+[[fixture]]
+name = "arrow_identity"
+source = "arrow/identity/src.js"
+status = "compile_pass"
+expected_stdout = "arrow/identity/expected.txt"
+
+[[fixture]]
+name = "closure_counter"
+source = "closure/counter/src.js"
+status = "compile_pass"
+expected_stdout = "closure/counter/expected.txt"
+
+[[fixture]]
+name = "ifelse_abs"
+source = "ifelse/abs/src.js"
+status = "compile_pass"
+expected_stdout = "ifelse/abs/expected.txt"
+
+[[fixture]]
+name = "forloop_sum"
+source = "forloop/sum/src.js"
+status = "compile_pass"
+expected_stdout = "forloop/sum/expected.txt"
+
+[[fixture]]
+name = "whileloop_count"
+source = "whileloop/count/src.js"
+status = "compile_pass"
+expected_stdout = "whileloop/count/expected.txt"
+
+[[fixture]]
+name = "whileloop_infinite"
+source = "whileloop/infinite/src.js"
+status = "compile_pass"
+expected_stdout = "whileloop/infinite/expected.txt"
+
+[[fixture]]
+name = "whileloop_do_while_infinite"
+source = "whileloop/do_while_infinite/src.js"
+status = "compile_pass"
+expected_stdout = "whileloop/do_while_infinite/expected.txt"
+
+[[fixture]]
+name = "forloop_infinite"
+source = "forloop/infinite/src.js"
+status = "compile_pass"
+expected_stdout = "forloop/infinite/expected.txt"
+
+[[fixture]]
+name = "trycatch_parse"
+source = "trycatch/parse/src.js"
+status = "compile_pass"
+expected_stdout = "trycatch/parse/expected.txt"
+
+[[fixture]]
+name = "class_point"
+source = "class/point/src.js"
+status = "compile_pass"
+expected_stdout = "class/point/expected.txt"
+
+[[fixture]]
+name = "destructuring_pair"
+source = "destructuring/pair/src.js"
+status = "compile_pass"
+expected_stdout = "destructuring/pair/expected.txt"
+
+[[fixture]]
+name = "template_greet"
+source = "template/greet/src.js"
+status = "compile_pass"
+expected_stdout = "template/greet/expected.txt"
+
+[[fixture]]
+name = "async_await_identifier"
+source = "async_await/identifier/src.js"
+status = "compile_pass"
+expected_stdout = "async_await/identifier/expected.txt"
+
+[[fixture]]
+name = "generators_declaration"
+source = "generators/declaration/src.js"
+status = "compile_pass"
+expected_stdout = "generators/declaration/expected.txt"
+
+[[fixture]]
+name = "spread_call_args"
+source = "spread/call_args/src.js"
+status = "compile_pass"
+expected_stdout = "spread/call_args/expected.txt"
+
+[[fixture]]
+name = "computed_property_string"
+source = "computed_property/string/src.js"
+status = "compile_pass"
+expected_stdout = "computed_property/string/expected.txt"
+
+[[fixture]]
+name = "optional_chaining_short_circuit"
+source = "optional_chaining/short_circuit/src.js"
+status = "compile_pass"
+expected_stdout = "optional_chaining/short_circuit/expected.txt"
+
+[[fixture]]
+name = "coalesce_chainable"
+source = "coalesce/chainable/src.js"
+status = "compile_pass"
+expected_stdout = "coalesce/chainable/expected.txt"
+
+[[fixture]]
+name = "class_private_field_arrow"
+source = "class/private_field_arrow/src.js"
+status = "compile_pass"
+expected_stdout = "class/private_field_arrow/expected.txt"
+
+[[fixture]]
+name = "symbol_uniqueness"
+source = "symbol/uniqueness/src.js"
+status = "compile_pass"
+expected_stdout = "symbol/uniqueness/expected.txt"
+
+[[fixture]]
+name = "forloop_for_of_array"
+source = "forloop/for_of_array/src.js"
+status = "compile_pass"
+expected_stdout = "forloop/for_of_array/expected.txt"
+
+[[fixture]]
+name = "rest_params_apply"
+source = "rest_params/apply/src.js"
+status = "compile_pass"
+expected_stdout = "rest_params/apply/expected.txt"
+
+[[fixture]]
+name = "rest_params_with_declared"
+source = "rest_params/with_declared/src.js"
+status = "compile_pass"
+expected_stdout = "rest_params/with_declared/expected.txt"
+
+[[fixture]]
+name = "symbol_iterator_protocol"
+source = "symbol_iterator/protocol/src.js"
+status = "compile_pass"
+expected_stdout = "symbol_iterator/protocol/expected.txt"
+
+[[fixture]]
+name = "array_methods_es6_find_fill_includes"
+source = "array_methods_es6/find_fill_includes/src.js"
+status = "compile_pass"
+expected_stdout = "array_methods_es6/find_fill_includes/expected.txt"
+
+[[fixture]]
+name = "object_methods_es6_keys_values_entries"
+source = "object_methods_es6/keys_values_entries/src.js"
+status = "compile_pass"
+expected_stdout = "object_methods_es6/keys_values_entries/expected.txt"
+
+[[fixture]]
+name = "object_spread_basic"
+source = "object_spread/basic/src.js"
+status = "compile_pass"
+expected_stdout = "object_spread/basic/expected.txt"
+
+[[fixture]]
+name = "promise_chain_then_catch_finally"
+source = "promise_chain/then_catch_finally/src.js"
+status = "compile_pass"
+expected_stdout = "promise_chain/then_catch_finally/expected.txt"
+
+[[fixture]]
+name = "regex_named_groups_capture"
+source = "regex_named_groups/capture/src.js"
+status = "compile_pass"
+expected_stdout = "regex_named_groups/capture/expected.txt"
+
+[[fixture]]
+name = "bigint_literals_arithmetic"
+source = "bigint_literals/arithmetic/src.js"
+status = "compile_pass"
+expected_stdout = "bigint_literals/arithmetic/expected.txt"
+
+[[fixture]]
+name = "class_static_fields_public_and_private"
+source = "class_static_fields/public_and_private/src.js"
+status = "compile_pass"
+expected_stdout = "class_static_fields/public_and_private/expected.txt"
+
+[[fixture]]
+name = "tagged_template_raw_string_raw"
+source = "tagged_template_raw/string_raw/src.js"
+status = "compile_pass"
+expected_stdout = "tagged_template_raw/string_raw/expected.txt"
+
+[[fixture]]
+name = "tagged_template_raw_escape_hazards"
+source = "tagged_template_raw/escape_hazards/src.js"
+status = "compile_pass"
+expected_stdout = "tagged_template_raw/escape_hazards/expected.txt"
+
+[[fixture]]
+name = "destructuring_default_computed_object_pattern"
+source = "destructuring_default_computed/object_pattern/src.js"
+status = "compile_pass"
+expected_stdout = "destructuring_default_computed/object_pattern/expected.txt"
+
+[[fixture]]
+name = "labeled_break_continue_nested_loops"
+source = "labeled_break_continue/nested_loops/src.js"
+status = "compile_pass"
+expected_stdout = "labeled_break_continue/nested_loops/expected.txt"

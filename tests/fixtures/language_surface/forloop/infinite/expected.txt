@@ -1,0 +1,18 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r2_6 = globalThis.forever(5);
+	var r2_7 = globalThis.print(r2_6);
+	return r2_7;
+}
+// ==hermes-fixture-function== 1
+function forever(a0) {
+	var r0_3 = 0;
+	var r2 = 1;
+	var r1_5 = r0_3 + r2;
+	r0_3 = r1_5;
+	while (r1_5 < a0) {
+		r1_5 = r0_3 + r2;
+		r0_3 = r1_5;
+	}
+	return r1_5;
+}

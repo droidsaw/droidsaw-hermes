@@ -1,0 +1,10 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r1_6 = globalThis.greet("world");
+	var r1_7 = globalThis.print(r1_6);
+	return r1_7;
+}
+// ==hermes-fixture-function== 1
+function greet(a0) {
+	return "hello, " + a0;
+}

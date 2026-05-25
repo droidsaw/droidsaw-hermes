@@ -1,9 +1,10 @@
 [package]
 name = "droidsaw-hermes"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
+rust-version.workspace = true
 license = "BSD-3-Clause"
-description = "DROIDSAW Hermes bytecode parser and decompiler for React Native. 21 CLI commands, 239 tests, 1.4M production functions validated. Covers v40–v100."
+description = "DROIDSAW Hermes bytecode parser and decompiler for React Native. Covers HBC v40–v100."
 repository = "https://github.com/droidsaw/droidsaw-hermes"
 homepage = "https://droidsaw.com"
 keywords = ["hermes", "react-native", "bytecode", "decompiler", "reverse-engineering"]
@@ -13,20 +14,29 @@ categories = ["development-tools", "parser-implementations"]
 name = "droidsaw_hermes"
 path = "src/lib.rs"
 
-[dependencies]
-anyhow = "1"
-droidsaw-common = "0.1.0"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-memmap2 = "0.9"
-regex = "1"
-rusqlite = { version = "0.34", features = ["bundled"] }
-sha1 = "0.10"
-zip = "2"
-oxc_allocator = "0.123"
-oxc_ast = "0.123"
-oxc_parser = "0.123"
-oxc_codegen = "0.123"
-oxc_span = "0.123"
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(fuzzing)'] }
 
-[workspace]
+[dependencies]
+anyhow = { workspace = true }
+droidsaw-common = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+memmap2 = "0.9.10"
+regex = { workspace = true }
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+rustc-hash = "2.1"
+sha1 = { workspace = true }
+zip = { workspace = true }
+oxc_allocator = "0.127"
+oxc_ast = "0.127"
+oxc_parser = "0.127"
+oxc_codegen = "0.127"
+oxc_span = "0.127"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+droidsaw-fixture-harness = { workspace = true }
+proptest = "1"
+insta = "1"

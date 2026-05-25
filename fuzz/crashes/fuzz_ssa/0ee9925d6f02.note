@@ -1,0 +1,11 @@
+stage: cfg→ssa (panics inside decode_function called before SSA construction)
+panic: unsupported bytecode version 25088
+site: src/opcodes.rs:9857:14
+repro: cargo fuzz run fuzz_ssa fuzz/crashes/fuzz_ssa/0ee9925d6f02
+
+Same root cause as `fuzz_cfg/15e6a48b0466` — parser accepts arbitrary u32
+versions but the opcode schema lookup panics outside the supported set. In
+fuzz_ssa the panic fires before SSA construction is reached, so this target
+is effectively blocked on the same fix until hermes-hardening lands. Once
+the version panic is converted to a typed Err, fuzz_ssa will resume
+exploring the SSA construction path.

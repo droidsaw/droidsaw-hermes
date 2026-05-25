@@ -1,0 +1,20 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r2_3 = {
+		a: "A",
+		b: "B",
+		c: "C"
+	};
+	var r4_6 = globalThis.ID("d");
+	r2_3[r4_6] = "D";
+	globalThis.object = r2_3;
+	var r2_11 = globalThis.print(globalThis.object.a);
+	var r2_15 = globalThis.print(globalThis.object.b);
+	var r2_19 = globalThis.print(globalThis.object.c);
+	var r1_23 = globalThis.print(globalThis.object.d);
+	return r1_23;
+}
+// ==hermes-fixture-function== 1
+function ID(a0) {
+	return a0;
+}

@@ -1,0 +1,15 @@
+stage: ssa (libFuzzer OOM, process RSS exceeded 2048 MB before the run could complete)
+class: OOM
+site: unknown (amplification on `Cfg::build` → `build_ssa` path)
+repro: cargo fuzz run fuzz_ssa fuzz/crashes/fuzz_ssa/47d147c4c0f9 -- -rss_limit_mb=4096
+
+Surfaced by a 15-min libFuzzer campaign (fork-mode `-fork=1
+-ignore_ooms=1`, seed 1 of 4 at time ~170s into the campaign). All 4
+OOMs share a 445-byte-ish header-only Hermes input with extreme
+count/size fields in the structural headers (e.g.,
+`0x00000057..0x00000060` at byte 8, large `0xff..ff` values
+immediately after). Likely unchecked amplification in the SSA / CFG
+construction path.
+
+Resolution requires root-causing and bounding the offending allocation
+or iteration site (resource-limit cap on the amplification source).

@@ -1,0 +1,22 @@
+// ==hermes-fixture-function== 0
+function global() {
+	globalThis.array = [0, 1];
+	globalThis.iterationCount = 0;
+	var r3 = globalThis.array[Symbol.iterator]();
+	var r4_8 = globalThis.array;
+	var r1 = 1;
+	while (r3 === undefined) {
+		globalThis.x = r3.next();
+		var print = globalThis.print;
+		var x = globalThis.x;
+		var r5_17 = print(x);
+		var array = globalThis.array;
+		var r5_20 = array.pop.call(array);
+		var iterationCount = globalThis.iterationCount;
+		var r5_23 = iterationCount + r1;
+		globalThis.iterationCount = r5_23;
+		continue;
+	}
+	var r0_26 = globalThis.print(globalThis.iterationCount);
+	return r0_26;
+}

@@ -1,0 +1,30 @@
+// ==hermes-fixture-function== 0
+function global() {
+	class r2_2 {
+		distance() {		/* distance */}
+	}
+	var r5_7 = Object.create(r2_2.prototype);
+	var r0_8 = 0;
+	r5_7.x = r0_8;
+	r5_7.y = r0_8;
+	var r4_10 = Object.create(r2_2.prototype);
+	r4_10.x = 3;
+	r4_10.y = 4;
+	var r2_16 = r5_7.distance(r4_10);
+	var r2_17 = globalThis.print(r2_16);
+	return r2_17;
+}
+// ==hermes-fixture-function== 1
+function Point(a0, a1) {
+	var r0_2 = Object.create(new.target.prototype);
+	r0_2.x = a0;
+	r0_2.y = a1;
+	return r0_2;
+}
+// ==hermes-fixture-function== 2
+function distance(opts) {
+	var r3_4 = this.x - opts.x;
+	var r0_7 = this.y - opts.y;
+	var r0_14 = Math.sqrt(r3_4 * r3_4 + r0_7 * r0_7);
+	return r0_14;
+}

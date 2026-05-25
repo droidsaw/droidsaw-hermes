@@ -1,0 +1,13 @@
+// ==hermes-fixture-function== 0
+function global() {
+	globalThis.re = /(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})/;
+	var r2_8 = globalThis.re.exec("2024-03-15");
+	globalThis.m = r2_8;
+	var r2_14 = globalThis.print(globalThis.m.groups.year);
+	var r2_19 = globalThis.print(globalThis.m.groups.month);
+	var r2_24 = globalThis.print(globalThis.m.groups.day);
+	var r2_32 = "a1 b2 c3".replace(/(?<letter>[a-z])(?<digit>\d)/g, "$<digit>$<letter>");
+	globalThis.s = r2_32;
+	var r1_35 = globalThis.print(globalThis.s);
+	return r1_35;
+}

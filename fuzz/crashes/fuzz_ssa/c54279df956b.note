@@ -1,0 +1,12 @@
+stage: ssa (libFuzzer OOM, process RSS exceeded 2048 MB before the run could complete)
+class: OOM
+site: unknown (amplification on `Cfg::build` → `build_ssa` path)
+repro: cargo fuzz run fuzz_ssa fuzz/crashes/fuzz_ssa/c54279df956b -- -rss_limit_mb=4096
+
+Same class as `47d147c4c0f9` / `ec54a00b120f` / `ff30d198a579`. 469-byte
+input; contains the literal byte string `SwitchI` — may implicate the
+`SwitchImm` / `StringSwitchImm` boundary-expansion loop in
+`src/decompile/cfg.rs:~90-160` (jump-table entries bounded by
+`num.min(65536)` × 8 bytes) as the specific amplification site, but
+not confirmed. Resolution requires a resource-limit cap before the
+amplification fires.

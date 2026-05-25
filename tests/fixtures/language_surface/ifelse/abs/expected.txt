@@ -1,0 +1,17 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r3_6 = globalThis.abs(-7);
+	var r3_7 = globalThis.print(r3_6);
+	var r2_11 = globalThis.abs(3);
+	var r2_12 = globalThis.print(r2_11);
+	return r2_12;
+}
+// ==hermes-fixture-function== 1
+function abs(a0) {
+	if (a0 < 0) {
+		var r1_2 = -a0;
+		return r1_2;
+	} else {
+		return a0;
+	}
+}

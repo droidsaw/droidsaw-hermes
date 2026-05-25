@@ -1,0 +1,14 @@
+stage: cfg (debug_assert fires inside Cfg::build)
+panic: "catch handler must appear after all its try-region blocks in RPO"
+site: src/decompile/cfg.rs:441:13
+repro: cargo fuzz run fuzz_cfg fuzz/crashes/fuzz_cfg/515ce46d6dac
+
+Surfaced by a 60s smoke re-run after the UnsupportedVersion fix
+unblocked deep fuzz_cfg exploration.
+
+Invariant 7 violation: an exception handler block ends up earlier in
+RPO than one of the try-region blocks that lists it as its handler.
+Adversarial input has overlapping/self-referential exception handler
+ranges that the post-order fixup doesn't straighten out. Fix is to
+switch from debug_assert to a typed Err (or replace the RPO fixup
+with one that is invariant-preserving by construction).

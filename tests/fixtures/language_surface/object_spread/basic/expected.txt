@@ -1,0 +1,41 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r2_7 = globalThis.simple_spread({ b: 2 });
+	var r2_11 = globalThis.multi_spread({ a: 1 }, { b: 2 });
+	var r1_14 = globalThis.mixed_spread({ b: 2 });
+	return r1_14;
+}
+// ==hermes-fixture-function== 1
+function simple_spread(a0) {
+	var r1_0 = {
+		a: 1,
+		...a0
+	};
+	var r3_8 = globalThis.print(r1_0.a);
+	var r1_11 = globalThis.print(r1_0.b);
+	return undefined;
+}
+// ==hermes-fixture-function== 2
+function multi_spread(a0, a1) {
+	var r2_0 = {
+		...a0,
+		...a1,
+		c: 3
+	};
+	var r4_12 = globalThis.print(r2_0.a);
+	var r4_15 = globalThis.print(r2_0.b);
+	var r2_18 = globalThis.print(r2_0.c);
+	return undefined;
+}
+// ==hermes-fixture-function== 3
+function mixed_spread(a0) {
+	var r2_0 = {
+		a: 1,
+		...a0,
+		c: 3
+	};
+	var r4_9 = globalThis.print(r2_0.a);
+	var r4_12 = globalThis.print(r2_0.b);
+	var r2_15 = globalThis.print(r2_0.c);
+	return undefined;
+}

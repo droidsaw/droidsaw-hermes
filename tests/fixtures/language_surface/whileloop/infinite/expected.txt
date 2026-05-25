@@ -1,0 +1,19 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r1_5 = globalThis.serve();
+	var r1_6 = globalThis.print(r1_5);
+	return r1_6;
+}
+// ==hermes-fixture-function== 1
+function serve() {
+	var r0_3 = 0;
+	var r2 = 1;
+	var r3 = 10;
+	var r1_5 = r0_3 + r2;
+	r0_3 = r1_5;
+	while (r3 >= r1_5) {
+		r1_5 = r0_3 + r2;
+		r0_3 = r1_5;
+	}
+	return r1_5;
+}

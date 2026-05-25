@@ -1,0 +1,47 @@
+// ==hermes-fixture-function== 0
+function global() {
+	globalThis.a = [
+		1,
+		2,
+		3,
+		4,
+		5
+	];
+	var r5_7 = globalThis.a.findIndex(
+		null
+		/* closure #1 */
+	);
+	var r5_8 = globalThis.print(r5_7);
+	var r1_12 = 3;
+	var r5_13 = globalThis.a.includes(r1_12);
+	var r5_14 = globalThis.print(r5_13);
+	var r5_19 = globalThis.a.includes(99);
+	var r5_20 = globalThis.print(r5_19);
+	globalThis.b = [
+		0,
+		0,
+		0,
+		0
+	];
+	var r5_26 = globalThis.b.fill(7, 1, r1_12);
+	var r5_30 = globalThis.print(globalThis.b[0]);
+	var r5_34 = globalThis.print(globalThis.b[1]);
+	var r5_38 = globalThis.print(globalThis.b[2]);
+	var r5_42 = globalThis.print(globalThis.b[3]);
+	globalThis.c = [
+		1,
+		2,
+		3,
+		4,
+		5
+	];
+	var r5_47 = globalThis.c.copyWithin(0, r1_12);
+	var r5_51 = globalThis.print(globalThis.c[0]);
+	var r5_55 = globalThis.print(globalThis.c[1]);
+	var r4_59 = globalThis.print(globalThis.c[2]);
+	return r4_59;
+}
+// ==hermes-fixture-function== 1
+(a0) => {
+	return a0 > 3;
+};

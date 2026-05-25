@@ -1,0 +1,93 @@
+[package]
+name = "droidsaw-hermes-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.droidsaw-hermes]
+path = ".."
+
+[[bin]]
+name = "fuzz_parser"
+path = "fuzz_targets/fuzz_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_opcode_decode"
+path = "fuzz_targets/fuzz_opcode_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_cfg"
+path = "fuzz_targets/fuzz_cfg.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_ssa"
+path = "fuzz_targets/fuzz_ssa.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_emit_roundtrip_hbc"
+path = "fuzz_targets/fuzz_emit_roundtrip_hbc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cfg_differential"
+path = "fuzz_targets/cfg_differential.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parser_differential"
+path = "fuzz_targets/parser_differential.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_scan"
+path = "fuzz_targets/fuzz_scan.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_decode_source_locations"
+path = "fuzz_targets/fuzz_decode_source_locations.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
+
+# The parent `droidsaw` workspace Cargo.toml applies the same patch.
+# This fuzz crate declares `[workspace]` to stay out of that workspace
+# (fuzz targets aren't a workspace member), so we have to repeat the
+# patch here, otherwise `droidsaw-hermes` would pull `droidsaw-common`
+# from crates.io — which is stale relative to what `droidsaw-hermes`
+# actually calls.
+#
+# Path is relative to this Cargo.toml (main checkout: droidsaw-hermes/fuzz/).
+# Worktrees living under `droidsaw-hermes/.claude/worktrees/<name>/fuzz/` must
+# update the `..`-depth accordingly before running cargo fuzz from there.
+[patch.crates-io]
+droidsaw-common = { path = "../../droidsaw-common" }

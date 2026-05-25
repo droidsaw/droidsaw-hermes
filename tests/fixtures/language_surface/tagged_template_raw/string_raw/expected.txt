@@ -1,0 +1,13 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r4_14 = String.raw`Hello\n${3}World\t!`;
+	var r4_15 = globalThis.print(r4_14);
+	var r3_27 = globalThis.tag`line1\nline2 ${99}`;
+	var r3_28 = globalThis.print(r3_27);
+	return r3_28;
+}
+// ==hermes-fixture-function== 1
+function tag(a0, a1) {
+	var r1_7 = "" + (a0.raw[0] + "|" + a0[0]);
+	return r1_7 + a1;
+}

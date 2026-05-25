@@ -1,0 +1,40 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r3_0 = _env;
+	var r2_1 = void 0;
+	r3_0["slot[0]"] = r2_1;
+	class r1_3 {
+		method() {		/* method */}
+	}
+	var r3_8 = Object.create(r1_3.prototype);
+	var r0_10 = r2_1 in r3_8;
+	if (r0_10) {} else {
+		var r1_12 = null;
+		r1_12._private = r2_1;
+		var method = r3_8.method;
+		var r1_16 = method.call(r3_8);
+		var r1_17 = globalThis.print(r1_16);
+		return r1_17;
+	}
+}
+// ==hermes-fixture-function== 1
+function C() {
+	var r1_2 = Object.create(new.target.prototype);
+	var r3_4 = _closure0_slot0;
+	var r0_6 = r3_4 in r1_2;
+	if (r0_6) {} else {
+		var r2_8 = null;
+		r2_8._private = r3_4;
+		return r1_2;
+	}
+}
+// ==hermes-fixture-function== 2
+function method() {
+	var r0_3 = this._private;
+	var r0_4 = r0_3.call(this);
+	return r0_4;
+}
+// ==hermes-fixture-function== 3
+function _m() {
+	return;
+}

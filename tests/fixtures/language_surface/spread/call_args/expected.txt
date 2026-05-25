@@ -1,0 +1,23 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r3_5 = [
+		5,
+		...[
+			6,
+			7,
+			8
+		],
+		9
+	];
+	var r3_12 = globalThis.record.apply(null, r3_5);
+	return r3_12;
+}
+// ==hermes-fixture-function== 1
+function record(a0, a1, a2, a3, a4) {
+	var r2_4 = globalThis.print(a0);
+	var r2_7 = globalThis.print(a1);
+	var r2_10 = globalThis.print(a2);
+	var r2_13 = globalThis.print(a3);
+	var r1_16 = globalThis.print(a4);
+	return undefined;
+}

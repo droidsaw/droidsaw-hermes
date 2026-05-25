@@ -1,0 +1,11 @@
+stage: cfg (panics inside decode_function called from fuzz_cfg target)
+panic: unsupported bytecode version 65623
+site: src/opcodes.rs:9857:14
+repro: cargo fuzz run fuzz_cfg fuzz/crashes/fuzz_cfg/15e6a48b0466
+
+Parser accepts arbitrary u32 versions from the HBC header but the opcode
+schema lookup (`get_version_tables`) only matches a fixed set (40..=100 plus
+V98_LATE sentinel). Any version outside that set panics. Fix: convert the
+wildcard arm to a typed `Err` (or fall back to the closest supported
+version) so decode_function can signal "unsupported" upwards. Out of scope
+for hermes-fuzz; hand off to a hermes-hardening stream.

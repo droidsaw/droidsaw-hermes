@@ -1,0 +1,19 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r2_6 = null;
+	var r4_8 = globalThis.af.apply(r2_6, Array(0));
+	var r4_9 = globalThis.print(r4_8);
+	var r4_14 = globalThis.af.apply(r2_6, [1]);
+	var r4_15 = globalThis.print(r4_14);
+	var r4_20 = globalThis.af.apply(r2_6, [1, 2]);
+	var r4_21 = globalThis.print(r4_20);
+	var r3_25 = [1];
+	r3_25[2] = 2;
+	var r3_27 = globalThis.af.apply(r2_6, r3_25);
+	var r3_28 = globalThis.print(r3_27);
+	return r3_28;
+}
+// ==hermes-fixture-function== 1
+function af(...rest) {
+	return rest.length;
+}

@@ -1,0 +1,82 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r3_5 = globalThis.foo(3);
+	globalThis.g = r3_5;
+	var r3_9 = globalThis.g.next();
+	var r3_11 = globalThis.print(r3_9.value);
+	var r2_15 = globalThis.g.next();
+	var r2_17 = globalThis.print(r2_15.done);
+	return r2_17;
+}
+// ==hermes-fixture-function== 1
+function* foo(a0) {
+	var r1_0 = _env;
+	r1_0["slot[0]"] = a0;
+	var r0_2 = 0;
+	r1_0["slot[2]"] = r0_2;
+	r1_0["slot[1]"] = r0_2;
+	return null;
+}
+// ==hermes-fixture-function== 2
+function foo(a0) {
+	try {
+		var r1 = _parentEnv;
+		var r0_1 = _closure0_slot1;
+		var r4_3 = 2;
+		if (r0_1 === r4_3) {
+			var r0_28 = 3;
+			r1["slot[1]"] = r0_28;
+		} else {
+			var r6 = 3;
+			if (r0_1 === r6) {
+				var r5_25 = 1;
+				if (a0 === r5_25) {
+					throw a1;
+				}
+				if (a0 === r4_3) {
+					return a1;
+				} else {
+					return;
+				}
+			} else {
+				r1["slot[1]"] = r4_3;
+				var r7_9 = _closure0_slot2;
+				var r5_10 = 0;
+				if (r5_10 === r7_9) {
+					var r5_17 = 1;
+					if (a0 === r5_17) {
+						r1["slot[1]"] = r6;
+						throw a1;
+					} else {
+						if (a0 === r4_3) {
+							r1["slot[1]"] = r6;
+							return a1;
+						} else {
+							var r7_18 = _closure0_slot0;
+							var r7_19 = r7_18 + r5_17;
+							r1["slot[2]"] = r5_17;
+							r1["slot[1]"] = r5_17;
+						}
+					}
+				} else {
+					var r5_11 = 1;
+					if (a0 === r5_11) {
+						r1["slot[1]"] = r6;
+						throw a1;
+					} else {
+						if (a0 === r4_3) {
+							r1["slot[1]"] = r6;
+							return a1;
+						} else {
+							r1["slot[1]"] = r6;
+							return;
+						}
+					}
+				}
+			}
+		}
+	} catch (err) {
+		r1["slot[1]"] = r6;
+		throw err;
+	}
+}

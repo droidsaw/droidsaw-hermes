@@ -1,0 +1,30 @@
+// ==hermes-fixture-function== 0
+function global() {
+	globalThis.src = {
+		a: 1,
+		b: 2,
+		c: 3
+	};
+	var r2_6 = Object.assign({}, globalThis.src);
+	globalThis.dst = r2_6;
+	var r2_11 = globalThis.print(globalThis.dst.a);
+	var r2_15 = globalThis.print(globalThis.dst.b);
+	var r2_19 = globalThis.print(globalThis.dst.c);
+	var r2_23 = Object.keys(globalThis.src);
+	globalThis.keys = r2_23;
+	var r2_27 = globalThis.print(globalThis.keys[0]);
+	var r2_31 = globalThis.print(globalThis.keys[1]);
+	var r2_35 = globalThis.print(globalThis.keys[2]);
+	var r2_39 = Object.values(globalThis.src);
+	globalThis.values = r2_39;
+	var r2_43 = globalThis.print(globalThis.values[0]);
+	var r2_47 = globalThis.print(globalThis.values[1]);
+	var r2_51 = globalThis.print(globalThis.values[2]);
+	var r2_55 = Object.entries(globalThis.src);
+	globalThis.entries = r2_55;
+	var r2_60 = globalThis.print(globalThis.entries[0][0]);
+	var r2_65 = globalThis.print(globalThis.entries[0][1]);
+	var r2_70 = globalThis.print(globalThis.entries[1][0]);
+	var r1_75 = globalThis.print(globalThis.entries[1][1]);
+	return r1_75;
+}

@@ -1,0 +1,95 @@
+# hermes.dict — libFuzzer dictionary for Hermes Bytecode (HBC).
+#
+# Used by: fuzz_parser, parser_differential, fuzz_opcode_decode,
+# fuzz_emit_roundtrip_hbc, fuzz_cfg, cfg_differential, fuzz_ssa,
+# fuzz_decode_source_locations, fuzz_scan.
+#
+# Token provenance: HBC_MAGIC from droidsaw-hermes/src/header.rs:37;
+# version dispatch from droidsaw-hermes/src/header.rs:677-772.
+#
+# Format reference: facebook/hermes BCProvider serialization.
+
+# === HBC file magic (u64 LE) ===
+# Source: droidsaw-hermes/src/header.rs:37 — HBC_MAGIC = 0x1F1903C103BC1FC6
+# Serialized LE: 0xC6 0x1F 0xBC 0x03 0xC1 0x03 0x19 0x1F
+hbc_magic_u64_le="\xc6\x1f\xbc\x03\xc1\x03\x19\x1f"
+
+# === Version field (u32 LE, follows magic) ===
+# Source: droidsaw-hermes/src/header.rs:86-195 dispatch over `version: u32`.
+# Production dispatch buckets: pre_v84 (<=83), v84_to_86, v87_to_96,
+# v97_to_v98_early, v98_late_to_v99.
+hbc_v40="\x28\x00\x00\x00"
+hbc_v76="\x4c\x00\x00\x00"
+hbc_v84="\x54\x00\x00\x00"
+hbc_v86="\x56\x00\x00\x00"
+hbc_v87="\x57\x00\x00\x00"
+hbc_v90="\x5a\x00\x00\x00"
+hbc_v94="\x5e\x00\x00\x00"
+hbc_v95="\x5f\x00\x00\x00"
+hbc_v96="\x60\x00\x00\x00"
+hbc_v97="\x61\x00\x00\x00"
+hbc_v98="\x62\x00\x00\x00"
+hbc_v99="\x63\x00\x00\x00"
+
+# === Common opcode bytes ===
+# Source: facebook/hermes lib/BCGen/HBC/BytecodeList.def. The opcodes
+# below are the high-frequency control + call families that mutational
+# fuzzing benefits most from anchoring.
+op_unreachable="\x00"
+op_load_const_undefined="\x05"
+op_load_const_null="\x06"
+op_load_const_true="\x07"
+op_load_const_false="\x08"
+op_load_const_zero="\x09"
+op_load_const_uint8="\x0a"
+op_load_const_int="\x0b"
+op_load_const_string="\x0e"
+op_load_const_string_long_index="\x0f"
+op_create_function="\x14"
+op_call="\x32"
+op_construct="\x33"
+op_get_by_id="\x4b"
+op_put_by_id="\x4d"
+op_get_by_val="\x55"
+op_put_by_val="\x57"
+op_new_object="\x66"
+op_new_array="\x68"
+op_jmp="\x95"
+op_jmp_long="\x96"
+op_ret="\xa6"
+op_throw="\xa7"
+
+# === Function header structural tags ===
+# Source: facebook/hermes lib/BCGen/HBC/BytecodeFileFormat.h FunctionHeader.
+fn_hdr_small="\x00"
+fn_hdr_large="\x01"
+
+# === Common JS string-table tokens ===
+# These are not magic — they appear as string-table entries in real HBC
+# files. Anchoring them lets the mutator hit string-resolution code paths.
+"require"
+"module"
+"exports"
+"prototype"
+"constructor"
+"length"
+"toString"
+"valueOf"
+"hasOwnProperty"
+"Symbol"
+"Promise"
+"console"
+"log"
+"undefined"
+"null"
+"true"
+"false"
+"NaN"
+"Infinity"
+
+# === React Native bridge tokens ===
+"NativeModules"
+"requireNativeComponent"
+"TurboModuleRegistry"
+"BatchedBridge"
+"__fbBatchedBridge"

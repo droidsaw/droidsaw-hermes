@@ -1,0 +1,27 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r2_6 = globalThis.sumTo(10);
+	var r2_7 = globalThis.print(r2_6);
+	return r2_7;
+}
+// ==hermes-fixture-function== 1
+function sumTo(a0) {
+	var r3 = 1;
+	var r6_2 = r3 <= a0;
+	var r0 = 0;
+	var r1_7 = r3;
+	var r2_13 = 0;
+	if (r6_2) {
+		var r0 = r0 + r1_7;
+		var r1_10 = r1_7 + r3;
+		r1_7 = r1_10;
+		r2_13 = r0;
+		while (r1_10 <= a0) {
+			r0 = r0 + r1_7;
+			r1_10 = r1_7 + r3;
+			r1_7 = r1_10;
+			r2_13 = r0;
+		}
+	}
+	return r2_13;
+}

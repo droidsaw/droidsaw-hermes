@@ -1,0 +1,17 @@
+// ==hermes-fixture-function== 0
+function global() {
+	var r5_5 = Symbol("");
+	var r4_7 = Symbol("");
+	var r2_9 = globalThis.print(r5_5 === r4_7);
+	var r5_12 = Symbol();
+	var r4_14 = Symbol();
+	var r2_16 = globalThis.print(r5_12 === r4_14);
+	var r1_19 = null;
+	var r5_20 = Symbol(r1_19);
+	var r4_22 = Symbol(r1_19);
+	var r2_24 = globalThis.print(r5_20 === r4_22);
+	var r4_28 = Symbol("x");
+	var r3_30 = Symbol("x");
+	var r2_32 = globalThis.print(r4_28 === r3_30);
+	return r2_32;
+}

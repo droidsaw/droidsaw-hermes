@@ -1,1 +1,6 @@
 /target
+.claude/
+
+# Secrets / local environment overrides — never commit.
+.env
+.env.*

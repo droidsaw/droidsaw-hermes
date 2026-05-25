@@ -1,0 +1,9 @@
+stage: ssa (libFuzzer OOM, process RSS exceeded 2048 MB before the run could complete)
+class: OOM
+site: unknown (amplification on `Cfg::build` → `build_ssa` path)
+repro: cargo fuzz run fuzz_ssa fuzz/crashes/fuzz_ssa/ec54a00b120f -- -rss_limit_mb=4096
+
+First OOM surfaced (during the non-fork `-max_total_time=900` run, which
+libFuzzer terminated at this seed before fork-mode exploration could
+begin). 346-byte input, same structural shape as the other 3 OOMs.
+Resolution requires a resource-limit cap before the amplification fires.
