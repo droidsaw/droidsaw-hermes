@@ -153,6 +153,26 @@ pub enum HermesFinding {
         buf_len: usize,
     },
 
+    /// A function's overflow large-header is in-bounds but its byte
+    /// span intersects a region emit recomputes from IR (file header /
+    /// FunctionHeaders table / string tables). The bytes are
+    /// double-claimed, so emit's faithful recompute would silently
+    /// mutate this function's metadata — a `parse → emit → parse`
+    /// fidelity break. Adversarial-only (a well-formed Hermes bundle
+    /// never overlaps a large header with a synthesized region). The
+    /// function is recorded unrecognized (terminal — never decoded)
+    /// and emit refuses the file as unrepresentable. Strict-API
+    /// counterpart:
+    /// [`crate::error::HermesError::OverflowedHeaderOverlapsSynthesizedRegion`].
+    OverflowedHeaderOverlapsSynthesizedRegion {
+        /// The function index whose overflow claim overlaps a
+        /// synthesized region.
+        func_idx: u32,
+        /// The declared large-header offset (verbatim from the
+        /// composed small-header bitfields).
+        large_off: u64,
+    },
+
     /// HBC v98 form-disambiguation could not pick a layout from the
     /// `BytecodeOptions`-byte heuristic alone (both `BYTECODE_OPTIONS_EARLY`
     /// at offset 108 and `BYTECODE_OPTIONS_LATE` at offset 112 passed the
@@ -406,6 +426,17 @@ pub fn findings_as_common(
                     Confidence::Verified,
                     format!(
                         "function {func_idx} large-header offset {large_off:#x} exceeds buf.len() {buf_len}"
+                    ),
+                ),
+                HermesFinding::OverflowedHeaderOverlapsSynthesizedRegion {
+                    func_idx,
+                    large_off,
+                } => (
+                    "HERMES_OVERFLOWED_HEADER_OVERLAPS_SYNTHESIZED_REGION",
+                    Severity::High,
+                    Confidence::Verified,
+                    format!(
+                        "function {func_idx} large-header at {large_off:#x} overlaps a synthesized region"
                     ),
                 ),
                 HermesFinding::V98FormAmbiguous {

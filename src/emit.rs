@@ -56,6 +56,30 @@ use thiserror::Error;
 /// Hermes HBC magic constant (first 8 bytes of every HBC file).
 const HBC_MAGIC: u64 = 0x1F19_03C1_03BC_1FC6;
 
+/// Canonical names of every **table** section emit recomputes from IR
+/// (SYNTHESIZE-mode), across all version pipelines. The 128-byte file
+/// header is always synthesized and is implicit (not listed here).
+///
+/// This is the single source of truth for the synthesized-region set.
+/// `parser::HbcFile::synthesized_section_spans` builds the overflow-
+/// overlap predicate's region set from exactly these (plus the header),
+/// and `tests::predicate_covers_every_emit_synthesize_call` fails if any
+/// emit pipeline calls an `emit_*` synthesize helper for a section not
+/// listed here — closing the silent-drift gap where a new synthesize
+/// region (e.g. ObjShapeTable) is added to emit but not to the predicate.
+///
+/// Per-pipeline subsets: v84 = {FunctionHeaders, SmallStringTable,
+/// OverflowStringTable, RegExpTable}; v96 = the first three; v97/98/99 =
+/// the first three + ObjShapeTable. The union is what the conservative
+/// predicate guards against.
+pub(crate) const EMIT_SYNTHESIZED_SECTIONS: &[&str] = &[
+    "FunctionHeaders",
+    "SmallStringTable",
+    "OverflowStringTable",
+    "RegExpTable",
+    "ObjShapeTable",
+];
+
 /// v96 HBC file header size in bytes (fixed layout; spec-defined).
 const HEADER_SIZE: usize = 128;
 
@@ -1523,6 +1547,147 @@ pub fn emit_hbc_v84(file: &HbcFile<'_>) -> Result<Vec<u8>, HermesEmitError> {
 mod tests {
     use super::*;
     use crate::parser::{HbcFile, HbcFileEquiv};
+
+    /// Structural drift-guard: every section that an emit pipeline
+    /// actually synthesizes (has a call site for its `emit_*` helper)
+    /// must be named in [`EMIT_SYNTHESIZED_SECTIONS`], and every name in
+    /// that const must have at least one call site. The overflow-overlap
+    /// predicate's region set is built from that same const, so this test
+    /// is the mechanical no-drift guarantee: adding a new synthesize
+    /// region to emit (a new `emit_<section>_*` call) without extending
+    /// the const fails here, surfacing exactly the class of silent drift
+    /// that left ObjShapeTable out of the predicate.
+    ///
+    /// Reads this module's own source. The helper-name → section-name map
+    /// is the contract between an `emit_*` helper and the SYNTHESIZE
+    /// section it writes; a new synthesize helper not in the map also
+    /// fails (the catch-all assertion below), forcing the author to wire
+    /// it into both the map and the const.
+    #[test]
+    fn predicate_covers_every_emit_synthesize_call() {
+        // (helper-fn-name fragment, canonical section name). The header
+        // synthesize (`emit_header_*`) is implicit and excluded — it is
+        // always in the predicate's span set.
+        const HELPER_TO_SECTION: &[(&str, &str)] = &[
+            ("emit_function_headers", "FunctionHeaders"),
+            ("emit_small_string_table", "SmallStringTable"),
+            ("emit_overflow_string_table", "OverflowStringTable"),
+            ("emit_regexp_table", "RegExpTable"),
+            ("emit_bigint_table", "BigIntTable"),
+            ("emit_obj_shape_table", "ObjShapeTable"),
+        ];
+
+        let src = include_str!("emit.rs");
+
+        // Extract every CALL-site identifier: an `ident(` occurrence that
+        // is not preceded by `fn ` (definition) and not inside a comment.
+        // Call helpers carry a version suffix (`emit_function_headers_v96`),
+        // so we match the identifier token immediately before `(`, then
+        // test it against the helper fragments.
+        fn call_idents(src: &str) -> Vec<String> {
+            let mut out = Vec::new();
+            for line in src.lines() {
+                let trimmed = line.trim_start();
+                // Skip doc/line comments and fn definitions. (Block
+                // comments are not used around these call sites.)
+                if trimmed.starts_with("//") || trimmed.starts_with("///") {
+                    continue;
+                }
+                let bytes = line.as_bytes();
+                let mut i = 0;
+                while i < bytes.len() {
+                    if bytes[i] == b'(' {
+                        // Walk back over the identifier preceding `(`.
+                        let end = i;
+                        let mut start = i;
+                        while start > 0 {
+                            let c = bytes[start - 1];
+                            if c.is_ascii_alphanumeric() || c == b'_' {
+                                start -= 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        if start < end {
+                            let ident = &line[start..end];
+                            // Reject definitions: `fn ident(` (the `fn `
+                            // keyword sits just before the identifier).
+                            let before = line[..start].trim_end();
+                            if !before.ends_with("fn") {
+                                out.push(ident.to_string());
+                            }
+                        }
+                    }
+                    i += 1;
+                }
+            }
+            out
+        }
+
+        let idents = call_idents(src);
+
+        // Map each helper-fragment to whether it has a call site, and
+        // assert each called synthesize helper's section is in the const.
+        let mut sections_with_callsite: Vec<&str> = Vec::new();
+        for ident in &idents {
+            for &(helper, section) in HELPER_TO_SECTION {
+                if ident.starts_with(helper) {
+                    assert!(
+                        EMIT_SYNTHESIZED_SECTIONS.contains(&section)
+                            || section == "BigIntTable",
+                        "emit calls {ident} (synthesizing {section}) but {section} is \
+                         missing from EMIT_SYNTHESIZED_SECTIONS — the overflow-overlap \
+                         predicate would not guard a large header overlapping it"
+                    );
+                    if !sections_with_callsite.contains(&section) {
+                        sections_with_callsite.push(section);
+                    }
+                }
+            }
+        }
+
+        // BigIntTable has a defined helper but NO pipeline call site
+        // (its bytes are body-passthrough); it is deliberately absent
+        // from the const. Assert that invariant so a future call site
+        // is forced to add it to the const + the predicate's span set.
+        assert!(
+            !sections_with_callsite.contains(&"BigIntTable"),
+            "emit_bigint_table now has a call site; add BigIntTable to \
+             EMIT_SYNTHESIZED_SECTIONS and to synthesized_section_spans"
+        );
+
+        // Every const entry must correspond to a real call site —
+        // otherwise the predicate over-rejects against a region nothing
+        // synthesizes (the inverse drift).
+        for &section in EMIT_SYNTHESIZED_SECTIONS {
+            assert!(
+                sections_with_callsite.contains(&section),
+                "EMIT_SYNTHESIZED_SECTIONS lists {section} but no emit pipeline \
+                 calls its synthesize helper — remove it or wire the call"
+            );
+        }
+
+        // Catch-all: any `emit_*_table` / `emit_*_headers` helper that
+        // gains a call site but is absent from HELPER_TO_SECTION escapes
+        // the coverage check above. The file-header synthesize
+        // (`emit_header_*`) is intentionally outside the map (always in
+        // the predicate's span set), so it is excluded here.
+        for ident in &idents {
+            let is_synth_helper = ident.starts_with("emit_")
+                && (ident.contains("_table") || ident.contains("_headers"))
+                && !ident.starts_with("emit_header")
+                // `emit_one_*` are per-entry inner helpers of a section
+                // synthesizer, not pipeline-level section writers.
+                && !ident.contains("emit_one_");
+            if is_synth_helper {
+                assert!(
+                    HELPER_TO_SECTION.iter().any(|(h, _)| ident.starts_with(h)),
+                    "synthesize helper {ident} has a call site but is not in \
+                     HELPER_TO_SECTION — map it to its SYNTHESIZE section"
+                );
+            }
+        }
+    }
 
     /// Smallest possible valid v96 HBC: 128-byte header + all counts zero.
     /// Shared discipline with `tests/roundtrip_hbc_proptest.rs`. Fuzz

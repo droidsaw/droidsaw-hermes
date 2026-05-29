@@ -210,14 +210,21 @@ fn decompile_one(
     if let Ok(pos) = unrecognized.binary_search_by_key(&func_id, |u| u.func_idx)
         && let Some(u) = unrecognized.get(pos)
     {
-        let crate::parser::UnrecognizedReason::OverflowedHeaderOutOfBounds {
-            large_off,
-            buf_len,
-        } = u.reason;
-        return Err(crate::HermesError::OverflowedHeaderOutOfBounds {
-            func_idx: func_id,
-            large_off,
-            buf_len,
+        return Err(match u.reason {
+            crate::parser::UnrecognizedReason::OverflowedHeaderOutOfBounds {
+                large_off,
+                buf_len,
+            } => crate::HermesError::OverflowedHeaderOutOfBounds {
+                func_idx: func_id,
+                large_off,
+                buf_len,
+            },
+            crate::parser::UnrecognizedReason::OverflowedHeaderOverlapsSynthesizedRegion {
+                large_off,
+            } => crate::HermesError::OverflowedHeaderOverlapsSynthesizedRegion {
+                func_idx: func_id,
+                large_off,
+            },
         });
     }
     let f = hbc.function_get(func_id);

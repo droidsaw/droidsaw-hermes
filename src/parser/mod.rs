@@ -198,6 +198,21 @@ pub enum UnrecognizedReason {
         /// The HBC buffer length at the time of the OOB check.
         buf_len: usize,
     },
+
+    /// The `overflowed` flag was set with an in-bounds large-header
+    /// offset, but the large-header byte span intersects a region emit
+    /// recomputes from IR (the 128-byte file header, the
+    /// FunctionHeaders small-header table, or the string tables). The
+    /// bytes are double-claimed, so emit's faithful recompute would
+    /// silently mutate this function's metadata on round-trip; the
+    /// small-header fallback offset is attacker-controllable, so the
+    /// body cannot be honestly located. Adversarial-only. See
+    /// [`crate::error::HermesError::OverflowedHeaderOverlapsSynthesizedRegion`].
+    OverflowedHeaderOverlapsSynthesizedRegion {
+        /// The declared large-header offset (verbatim from the composed
+        /// small-header bitfields).
+        large_off: u64,
+    },
 }
 
 /// CJS module entry.
@@ -726,6 +741,33 @@ impl<'a> HbcFile<'a> {
                     );
                     continue;
                 }
+                Err(HermesError::OverflowedHeaderOverlapsSynthesizedRegion {
+                    func_idx,
+                    large_off,
+                }) => {
+                    // Same recover-and-mark treatment as the OOB class:
+                    // record the index as unrecognized, emit the
+                    // finding, and `continue` (excluding it from
+                    // `spans` so it is never region-checked,
+                    // overlap-checked, or decoded). The aliased
+                    // small-header offset is never trusted, and
+                    // `reject_if_unrecognized` then refuses emit so the
+                    // round-trip violation cannot manifest.
+                    unrecognized.push(UnrecognizedFunction {
+                        func_idx,
+                        reason:
+                            UnrecognizedReason::OverflowedHeaderOverlapsSynthesizedRegion {
+                                large_off,
+                            },
+                    });
+                    crate::finding::emit_finding(
+                        crate::finding::HermesFinding::OverflowedHeaderOverlapsSynthesizedRegion {
+                            func_idx,
+                            large_off,
+                        },
+                    );
+                    continue;
+                }
                 Err(other) => return Err(other),
             };
             if f.size == 0 {
@@ -832,7 +874,10 @@ impl<'a> HbcFile<'a> {
         for idx in 0..self.function_count {
             let f = match self.function_get_checked(idx) {
                 Ok(f) => f,
-                Err(HermesError::OverflowedHeaderOutOfBounds { .. }) => continue,
+                Err(HermesError::OverflowedHeaderOutOfBounds { .. })
+                | Err(HermesError::OverflowedHeaderOverlapsSynthesizedRegion { .. }) => {
+                    continue;
+                }
                 Err(other) => return Err(other),
             };
             let count = self.function_exception_count(idx);
@@ -2102,6 +2147,19 @@ impl<'a> HbcFile<'a> {
                 buf_len: self.buf.len(),
             });
         }
+        // In-bounds but overlapping a region emit recomputes: the
+        // large-header bytes are double-claimed, so emit's faithful
+        // recompute mutates this function's metadata on round-trip and
+        // the silent `function_get` offset is attacker-aliased. Surface
+        // a typed Err so the caller recover-and-marks it as a terminal.
+        if self.overflow_header_overlaps_synthesized(large_off) {
+            return Err(
+                crate::error::HermesError::OverflowedHeaderOverlapsSynthesizedRegion {
+                    func_idx: index,
+                    large_off,
+                },
+            );
+        }
         // In-bounds overflow case: the silent and strict APIs agree.
         Ok(self.function_get(index))
     }
@@ -2462,6 +2520,93 @@ impl<'a> HbcFile<'a> {
             Some(end) => end > buf_len as u64,
             None => true,
         }
+    }
+
+    /// Half-open span intersection: does `[a_start, a_start + a_len)`
+    /// overlap `[b_start, b_start + b_len)`? A zero-length region (e.g.
+    /// an absent string table with `size == 0`) never intersects.
+    /// Extracted as a `const fn` for direct symbolic reasoning.
+    const fn spans_intersect(a_start: u64, a_len: u64, b_start: u64, b_len: u64) -> bool {
+        if a_len == 0 || b_len == 0 {
+            return false;
+        }
+        // Saturating ends: an end that would wrap u64 is clamped to
+        // u64::MAX, which only widens a span and so can only make the
+        // predicate MORE conservative (report overlap) — never miss
+        // one. Overlap iff each start precedes the other's end.
+        let a_end = a_start.saturating_add(a_len);
+        let b_end = b_start.saturating_add(b_len);
+        a_start < b_end && b_start < a_end
+    }
+
+    /// The `(start, size_bytes)` span of a single SYNTHESIZE-mode table
+    /// section, by its canonical name in
+    /// [`crate::emit::EMIT_SYNTHESIZED_SECTIONS`]. Returning `(_, 0)` for
+    /// an absent table (or a name with no parser span) is safe — a
+    /// zero-length span never intersects (see [`Self::spans_intersect`]).
+    ///
+    /// This is the name → span binding that makes
+    /// `EMIT_SYNTHESIZED_SECTIONS` the **single source of truth** for the
+    /// overlap predicate's region set: the predicate iterates that const
+    /// and resolves each name here, and
+    /// `emit::tests::predicate_covers_every_emit_synthesize_call`
+    /// drift-checks the const against emit's actual synthesize-helper
+    /// call sites. Adding a synthesized section to emit without extending
+    /// the const fails that test; a name in the const with no span here
+    /// silently degrades to no-overlap, which the same test guards by
+    /// requiring every const name to map to a real emit call.
+    fn synthesized_section_span_by_name(&self, name: &str) -> (usize, usize) {
+        match name {
+            "FunctionHeaders" => self.func_headers,
+            "SmallStringTable" => self.small_string_table,
+            "OverflowStringTable" => self.overflow_string_table,
+            "RegExpTable" => self.regexp_table,
+            "ObjShapeTable" => self.obj_shape_table,
+            _ => (0, 0),
+        }
+    }
+
+    /// Does an overflowed function's in-bounds large-header byte span
+    /// `[large_off, large_off + LARGE_FUNCTION_HEADER_SIZE)` intersect
+    /// a region emit recomputes from IR?
+    ///
+    /// The synthesized region set is the always-present 128-byte file
+    /// header plus every SYNTHESIZE-mode table section named in
+    /// [`crate::emit::EMIT_SYNTHESIZED_SECTIONS`] (the union across all
+    /// version pipelines — v84 synthesizes RegExpTable, v97+ synthesizes
+    /// ObjShapeTable, the rest are common). Each table span comes from
+    /// the parser's `section!` macro at parse time, the same `(start,
+    /// size)` tuples emit's layout derives from, so the predicate cannot
+    /// drift from where emit actually writes; the union is strictly
+    /// conservative (absent tables are zero-length and skipped).
+    ///
+    /// When this returns `true`, emit's faithful recompute of the
+    /// overlapping synthesized region would silently mutate this
+    /// function's aliased `offset`/`size`/`flags`, breaking
+    /// `parse → emit → parse`. The caller recover-and-marks the
+    /// function unrecognized (terminal — never decoded) and
+    /// `reject_if_unrecognized` then refuses emit.
+    ///
+    /// A well-formed Hermes bundle never trips this: the serializer
+    /// lays SecondaryFuncHeaders in the function-info region after the
+    /// header and every table, so a real `large_off` is always past
+    /// all synthesized regions. Adversarial-only.
+    fn overflow_header_overlaps_synthesized(&self, large_off: u64) -> bool {
+        const FH: u64 = LARGE_FUNCTION_HEADER_SIZE as u64;
+        // The file header is always synthesized.
+        if Self::spans_intersect(large_off, FH, 0, crate::header::HEADER_SIZE as u64) {
+            return true;
+        }
+        // Every SYNTHESIZE-mode table section, resolved by name from the
+        // shared source-of-truth const. A zero-size section (absent
+        // table) is skipped inside `spans_intersect`.
+        for &name in crate::emit::EMIT_SYNTHESIZED_SECTIONS {
+            let (start, size) = self.synthesized_section_span_by_name(name);
+            if Self::spans_intersect(large_off, FH, start as u64, size as u64) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Get exception handler count for a function.
@@ -3301,6 +3446,53 @@ mod overflow_header_oob_tests {
     #[test]
     fn large_function_header_size_is_pinned_at_40() {
         assert_eq!(LARGE_FUNCTION_HEADER_SIZE, 40);
+    }
+}
+
+#[cfg(test)]
+mod spans_intersect_tests {
+    use super::HbcFile;
+
+    /// Half-open `[a_start, a_start+a_len)` vs `[b_start, b_start+b_len)`.
+    /// Touching-but-disjoint (`a_end == b_start`) must NOT count as
+    /// overlap; one byte of shared range must.
+    #[test]
+    fn touching_endpoints_do_not_overlap() {
+        // [0,10) and [10,20): adjacent, share no byte.
+        assert!(!HbcFile::spans_intersect(0, 10, 10, 10));
+        assert!(!HbcFile::spans_intersect(10, 10, 0, 10));
+    }
+
+    #[test]
+    fn one_shared_byte_overlaps() {
+        // [0,11) and [10,20): share byte 10.
+        assert!(HbcFile::spans_intersect(0, 11, 10, 10));
+        // Large header [1,41) vs file header [0,128): the v98 repro shape.
+        assert!(HbcFile::spans_intersect(1, 40, 0, 128));
+        // Large header [32,72) vs file header [0,128): the v96 repro shape.
+        assert!(HbcFile::spans_intersect(32, 40, 0, 128));
+    }
+
+    #[test]
+    fn zero_length_region_never_overlaps() {
+        // An absent table (size 0) is never intersected, even if its
+        // start sits inside the other span.
+        assert!(!HbcFile::spans_intersect(0, 40, 10, 0));
+        assert!(!HbcFile::spans_intersect(10, 0, 0, 40));
+    }
+
+    #[test]
+    fn fully_past_does_not_overlap() {
+        // A real bundle's large header sits far past the header/tables.
+        assert!(!HbcFile::spans_intersect(1000, 40, 0, 128));
+    }
+
+    #[test]
+    fn saturating_end_stays_conservative() {
+        // A start near u64::MAX whose end would wrap is clamped to
+        // u64::MAX (widening), so overlap detection never silently
+        // misses. Here both spans reach the top of the range.
+        assert!(HbcFile::spans_intersect(u64::MAX - 1, 40, u64::MAX - 1, 40));
     }
 }
 

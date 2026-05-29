@@ -327,6 +327,36 @@ pub enum HermesError {
         buf_len: usize,
     },
 
+    /// A function header had the `overflowed` flag set with an
+    /// in-bounds large-header offset, but the large-header byte span
+    /// `[large_off, large_off + LARGE_FUNCTION_HEADER_SIZE)`
+    /// physically intersects a region that emit recomputes from IR
+    /// (the 128-byte file header, the FunctionHeaders small-header
+    /// table, or the string tables). Because those bytes are
+    /// double-claimed — once by the synthesized region, once by this
+    /// function's large header — emit's faithful recompute of the
+    /// synthesized region silently mutates this function's
+    /// `offset`/`size`/`flags`, breaking `parse → emit → parse`. A
+    /// well-formed Hermes bundle never lays a large header inside a
+    /// synthesized region (the serializer places SecondaryFuncHeaders
+    /// in the function-info region after every table), so this shape
+    /// is adversarial-only. The non-strict `function_get` path returns
+    /// the aliased `offset`, indistinguishable from a real function,
+    /// letting body decode route to a wrong offset; the strict API
+    /// surfaces this typed Err so the caller can recover-and-mark the
+    /// function as unrecognized (terminal — never decoded).
+    #[error(
+        "function {func_idx}: overflow large-header at {large_off:#x} overlaps a synthesized region"
+    )]
+    OverflowedHeaderOverlapsSynthesizedRegion {
+        /// The function index whose overflow claim overlaps a
+        /// synthesized region.
+        func_idx: u32,
+        /// The declared large-header offset (verbatim from the
+        /// composed small-header bitfields).
+        large_off: u64,
+    },
+
     /// HBC v98 form-disambiguation failed because both
     /// `BytecodeOptions`-byte positions (offset 108 for v98-early,
     /// 112 for v98-late) had reserved bits set (`& 0xF8 != 0`). With
