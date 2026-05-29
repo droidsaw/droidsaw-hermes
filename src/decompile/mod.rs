@@ -225,6 +225,12 @@ fn decompile_one(
                 func_idx: func_id,
                 large_off,
             },
+            crate::parser::UnrecognizedReason::ExceptionTableOverlapsSynthesizedRegion {
+                exc_offset,
+            } => crate::HermesError::ExceptionTableOverlapsSynthesizedRegion {
+                func_idx: func_id,
+                exc_offset,
+            },
         });
     }
     let f = hbc.function_get(func_id);

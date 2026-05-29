@@ -213,6 +213,21 @@ pub enum UnrecognizedReason {
         /// small-header bitfields).
         large_off: u64,
     },
+
+    /// The function's `has_exception_handler` flag was set and its
+    /// resolved exception-handler table (`get_exc_table_offset` →
+    /// `[exc_offset, exc_offset + 4 + count*12)`) intersects a region
+    /// emit recomputes from IR (the 128-byte file header or a
+    /// SYNTHESIZE-mode table section). The table bytes are
+    /// double-claimed, so emit's faithful recompute of the synthesized
+    /// region would silently mutate the handler count / ranges the next
+    /// parse re-reads, breaking `parse → emit → parse`. Adversarial-
+    /// only. See
+    /// [`crate::error::HermesError::ExceptionTableOverlapsSynthesizedRegion`].
+    ExceptionTableOverlapsSynthesizedRegion {
+        /// The resolved exception-table offset (`get_exc_table_offset`).
+        exc_offset: u32,
+    },
 }
 
 /// CJS module entry.
@@ -770,6 +785,37 @@ impl<'a> HbcFile<'a> {
                 }
                 Err(other) => return Err(other),
             };
+            // Exception-table aliasing: a function with the
+            // `has_exception_handler` flag set whose resolved exception
+            // table physically overlaps a region emit recomputes from IR
+            // (file header / a SYNTHESIZE-mode table) has a
+            // double-claimed table — emit's faithful recompute would
+            // mutate the handler count/ranges the next parse re-reads,
+            // breaking `parse → emit → parse`. Same recover-and-mark
+            // treatment as the overflow-overlap class: record the index
+            // as unrecognized, emit the finding, and `continue`
+            // (excluding it from `spans`/overlap/decode). Checked before
+            // the `f.size == 0` skip below — the aliasing is independent
+            // of body size (a zero-size function can still carry a
+            // has-exc flag and an aliased table). `reject_if_unrecognized`
+            // then refuses emit so the round-trip violation cannot
+            // manifest. Adversarial-only (no well-formed bundle lays an
+            // exception table inside a synthesized region).
+            if let Some(exc_offset) = self.exc_table_overlaps_synthesized(idx) {
+                unrecognized.push(UnrecognizedFunction {
+                    func_idx: idx,
+                    reason: UnrecognizedReason::ExceptionTableOverlapsSynthesizedRegion {
+                        exc_offset,
+                    },
+                });
+                crate::finding::emit_finding(
+                    crate::finding::HermesFinding::ExceptionTableOverlapsSynthesizedRegion {
+                        func_idx: idx,
+                        exc_offset,
+                    },
+                );
+                continue;
+            }
             if f.size == 0 {
                 continue;
             }
@@ -871,7 +917,23 @@ impl<'a> HbcFile<'a> {
         // unchanged), so skip those indices — they were already
         // excluded from `spans` and have no trustworthy `f.size` to
         // bound handlers against. Every other error class hard-rejects.
+        // Functions recover-and-marked in Pass 1 for the
+        // exception-table-overlap class are NOT distinguishable by a
+        // `function_get_checked` error (they are non-overflowed), so
+        // skip any index already in the `unrecognized` side-set: its
+        // exception table is aliased and must never be range-checked
+        // (the count/handlers it reads are double-claimed bytes).
         for idx in 0..self.function_count {
+            // `unrecognized` is pushed in ascending func_idx order in Pass 1,
+            // so membership is a binary_search (O(log n)) — not a linear scan
+            // inside this per-function loop (which would be O(n^2) on a crafted
+            // all-overlap input).
+            if unrecognized
+                .binary_search_by_key(&idx, |u| u.func_idx)
+                .is_ok()
+            {
+                continue;
+            }
             let f = match self.function_get_checked(idx) {
                 Ok(f) => f,
                 Err(HermesError::OverflowedHeaderOutOfBounds { .. })
@@ -2593,20 +2655,88 @@ impl<'a> HbcFile<'a> {
     /// all synthesized regions. Adversarial-only.
     fn overflow_header_overlaps_synthesized(&self, large_off: u64) -> bool {
         const FH: u64 = LARGE_FUNCTION_HEADER_SIZE as u64;
-        // The file header is always synthesized.
-        if Self::spans_intersect(large_off, FH, 0, crate::header::HEADER_SIZE as u64) {
+        self.span_overlaps_synthesized(large_off, FH)
+    }
+
+    /// Does the byte span `[span_start, span_start + span_len)` intersect
+    /// any region emit recomputes from IR — the always-present 128-byte
+    /// file header or any SYNTHESIZE-mode table section named in
+    /// [`crate::emit::EMIT_SYNTHESIZED_SECTIONS`]? Shared by the
+    /// large-header and exception-table overlap predicates so both reason
+    /// about the same synthesized region set (the single source of truth
+    /// drift-guarded by `emit::tests::predicate_covers_every_emit_synthesize_call`).
+    fn span_overlaps_synthesized(&self, span_start: u64, span_len: u64) -> bool {
+        if Self::spans_intersect(span_start, span_len, 0, crate::header::HEADER_SIZE as u64) {
             return true;
         }
-        // Every SYNTHESIZE-mode table section, resolved by name from the
-        // shared source-of-truth const. A zero-size section (absent
-        // table) is skipped inside `spans_intersect`.
         for &name in crate::emit::EMIT_SYNTHESIZED_SECTIONS {
             let (start, size) = self.synthesized_section_span_by_name(name);
-            if Self::spans_intersect(large_off, FH, start as u64, size as u64) {
+            if Self::spans_intersect(span_start, span_len, start as u64, size as u64) {
                 return true;
             }
         }
         false
+    }
+
+    /// If function `func_idx` carries the `has_exception_handler` flag and
+    /// the exception-handler table it resolves to physically overlaps a
+    /// region emit recomputes from IR, return the resolved table offset.
+    ///
+    /// The table layout is a 4-byte handler-count word at
+    /// `get_exc_table_offset` followed by `count` × 12-byte handler
+    /// entries. The count is read from the file *before* any emit
+    /// recompute, capped by [`crate::finding::MAX_EXCEPTION_HANDLERS`],
+    /// and the full declared span `[exc_offset, exc_offset + 4 +
+    /// count*12)` is checked (saturating, so an oversized span only
+    /// widens the check — never misses an overlap). A zero-`count` table
+    /// still has its 4-byte count word checked: that word is the byte
+    /// emit's `file_length` recompute aliased in the observed crash.
+    ///
+    /// When this returns `Some`, emit's faithful recompute of the
+    /// overlapping synthesized region would silently mutate the bytes the
+    /// next parse re-reads as this function's handler count / ranges,
+    /// breaking `parse → emit → parse`. The caller recover-and-marks the
+    /// function unrecognized (terminal — never decoded) and
+    /// `reject_if_unrecognized` then refuses emit.
+    ///
+    /// A well-formed Hermes bundle never trips this: the serializer lays
+    /// the exception-handler-info region after the header and every
+    /// table, so a real exception table is always past all synthesized
+    /// regions. Adversarial-only.
+    fn exc_table_overlaps_synthesized(&self, func_idx: u32) -> Option<u32> {
+        let f = self.function_get(func_idx);
+        let has_exc = (f.flags >> 3) & 1 != 0;
+        if !has_exc {
+            return None;
+        }
+        let exc_offset = self.get_exc_table_offset(func_idx);
+        // Read the declared handler count from the (pre-emit) bytes, but
+        // never read past the buffer. If the count word itself is OOB the
+        // table is unreadable; fall back to checking just the 4-byte
+        // count word for overlap (still catches the header-aliasing case).
+        let count_capped: u64 = {
+            let off = exc_offset as usize;
+            match off.checked_add(4) {
+                Some(end) if end <= self.buf.len() => {
+                    let c = read_u32(self.buf, off);
+                    if c > crate::finding::MAX_EXCEPTION_HANDLERS {
+                        0
+                    } else {
+                        u64::from(c)
+                    }
+                }
+                _ => 0,
+            }
+        };
+        // Span = 4-byte count word + count * 12-byte handlers, saturating.
+        let span_len = count_capped
+            .saturating_mul(12)
+            .saturating_add(4);
+        if self.span_overlaps_synthesized(u64::from(exc_offset), span_len) {
+            Some(exc_offset)
+        } else {
+            None
+        }
     }
 
     /// Get exception handler count for a function.

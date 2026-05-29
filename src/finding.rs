@@ -173,6 +173,26 @@ pub enum HermesFinding {
         large_off: u64,
     },
 
+    /// A function has its `has_exception_handler` flag set and the
+    /// exception-handler table it points at intersects a region emit
+    /// recomputes from IR (file header / a SYNTHESIZE-mode table
+    /// section). The table's count word / handler entries are
+    /// double-claimed, so emit's faithful recompute would silently
+    /// mutate the bytes the next parse re-reads as this function's
+    /// handlers — a `parse → emit → parse` fidelity break.
+    /// Adversarial-only (a well-formed Hermes bundle never lays an
+    /// exception table inside a synthesized region). The function is
+    /// recorded unrecognized (terminal — never decoded) and emit
+    /// refuses the file as unrepresentable. Strict-API counterpart:
+    /// [`crate::error::HermesError::ExceptionTableOverlapsSynthesizedRegion`].
+    ExceptionTableOverlapsSynthesizedRegion {
+        /// The function index whose exception table overlaps a
+        /// synthesized region.
+        func_idx: u32,
+        /// The resolved exception-table offset (`get_exc_table_offset`).
+        exc_offset: u32,
+    },
+
     /// HBC v98 form-disambiguation could not pick a layout from the
     /// `BytecodeOptions`-byte heuristic alone (both `BYTECODE_OPTIONS_EARLY`
     /// at offset 108 and `BYTECODE_OPTIONS_LATE` at offset 112 passed the
@@ -437,6 +457,17 @@ pub fn findings_as_common(
                     Confidence::Verified,
                     format!(
                         "function {func_idx} large-header at {large_off:#x} overlaps a synthesized region"
+                    ),
+                ),
+                HermesFinding::ExceptionTableOverlapsSynthesizedRegion {
+                    func_idx,
+                    exc_offset,
+                } => (
+                    "HERMES_EXCEPTION_TABLE_OVERLAPS_SYNTHESIZED_REGION",
+                    Severity::High,
+                    Confidence::Verified,
+                    format!(
+                        "function {func_idx} exception table at {exc_offset:#x} overlaps a synthesized region"
                     ),
                 ),
                 HermesFinding::V98FormAmbiguous {

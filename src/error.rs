@@ -357,6 +357,33 @@ pub enum HermesError {
         large_off: u64,
     },
 
+    /// A function has its `has_exception_handler` flag set and the
+    /// exception-handler table it points at (`[exc_offset, exc_offset +
+    /// 4 + count*12)`, located via `get_exc_table_offset`) physically
+    /// intersects a region emit recomputes from IR (the 128-byte file
+    /// header or a SYNTHESIZE-mode table section). Because the table's
+    /// count word and/or handler entries are double-claimed — once by
+    /// the synthesized region, once by this function's exception table
+    /// — emit's faithful recompute of the synthesized region silently
+    /// mutates the bytes the next parse re-reads as this function's
+    /// handler count / handler ranges, breaking `parse → emit → parse`.
+    /// A well-formed Hermes bundle never lays an exception table inside
+    /// a synthesized region (the serializer places it in the
+    /// function-info region after the header and every table), so this
+    /// shape is adversarial-only. The caller recover-and-marks the
+    /// function as unrecognized (terminal — never decoded); emit then
+    /// refuses via `reject_if_unrecognized`.
+    #[error(
+        "function {func_idx}: exception table at {exc_offset:#x} overlaps a synthesized region"
+    )]
+    ExceptionTableOverlapsSynthesizedRegion {
+        /// The function index whose exception table overlaps a
+        /// synthesized region.
+        func_idx: u32,
+        /// The resolved exception-table offset (`get_exc_table_offset`).
+        exc_offset: u32,
+    },
+
     /// HBC v98 form-disambiguation failed because both
     /// `BytecodeOptions`-byte positions (offset 108 for v98-early,
     /// 112 for v98-late) had reserved bits set (`& 0xF8 != 0`). With
