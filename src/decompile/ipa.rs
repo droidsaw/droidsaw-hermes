@@ -54,6 +54,12 @@ pub fn collect_param_names(
 
     #[allow(clippy::as_conversions, reason = "this loop's `as` casts are u32→usize / usize→u64 widens on every project-supported target (32+-bit). Slice indexing below is bounds- gated by the `end > data.len() as u64` check and `body_end <= data.len()` by construction. Block-level allow keeps the per-cast annotations out of the loop body's hot reading path.")]
     for fid in 0..hbc.function_count {
+        // Skip unrecognized functions: their lenient `function_get`
+        // offset is the untrusted small-header fallback, so decoding
+        // their body would route at an attacker-controllable position.
+        if hbc.is_function_unrecognized(fid) {
+            continue;
+        }
         let f = hbc.function_get(fid);
         let end = u64::from(f.offset).saturating_add(u64::from(f.size));
         if end > data.len() as u64 || f.size == 0 {

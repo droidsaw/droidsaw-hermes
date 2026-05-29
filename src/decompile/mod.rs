@@ -140,7 +140,10 @@ fn make_get_func_name<'a>(hbc: &'a crate::parser::HbcFile<'a>) -> impl Fn(u32) -
     // Lenient policy mirroring `make_get_str` — a corrupted name
     // entry renders as empty rather than aborting decompile.
     |fid: u32| -> String {
-        if fid < hbc.function_count {
+        // Unrecognized functions have no trustworthy small-header
+        // `name_id`; render an empty name rather than resolve a
+        // fallback-bitfield index.
+        if fid < hbc.function_count && !hbc.is_function_unrecognized(fid) {
             let fi = hbc.function_get(fid);
             if fi.name_id < hbc.string_count {
                 return hbc.string_as_str_or_empty(fi.name_id).into_owned();
@@ -190,6 +193,31 @@ fn decompile_one(
         return Err(crate::HermesError::FunctionIdOutOfRange {
             id: func_id,
             function_count: hbc.function_count,
+        });
+    }
+    // Terminal: an unrecognized function has no trustworthy
+    // `(offset, size)` — the lenient `function_get` would return the
+    // small-header fallback offset, decoding the body at an
+    // attacker-controllable position (plausible-but-wrong). Surface the
+    // typed Err carrying the recorded reason; the body is never read.
+    //
+    // The side-set is sorted ascending by `func_idx`, so locate the
+    // entry by binary search: this runs once per `decompile_one` call,
+    // and `decompile_bundle` calls it across `0..function_count`, so a
+    // linear `.find()` here would amplify to `O(N²)` on a crafted
+    // all-OOB-overflow file.
+    let unrecognized = hbc.unrecognized_functions();
+    if let Ok(pos) = unrecognized.binary_search_by_key(&func_id, |u| u.func_idx)
+        && let Some(u) = unrecognized.get(pos)
+    {
+        let crate::parser::UnrecognizedReason::OverflowedHeaderOutOfBounds {
+            large_off,
+            buf_len,
+        } = u.reason;
+        return Err(crate::HermesError::OverflowedHeaderOutOfBounds {
+            func_idx: func_id,
+            large_off,
+            buf_len,
         });
     }
     let f = hbc.function_get(func_id);

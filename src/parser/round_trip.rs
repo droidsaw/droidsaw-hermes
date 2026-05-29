@@ -1397,6 +1397,7 @@ mod tests {
             bytecode_region: (0, 0),
             sections: Vec::new(),
             input_hash: String::new(),
+            unrecognized_functions: Vec::new(),
         };
         assert_eq!(hbc.bigint_as_str(0), Some("123".to_string()));
         // Out-of-bounds index → None, no panic.
@@ -1487,6 +1488,7 @@ mod tests {
             bytecode_region: (0, 0),
             sections: Vec::new(),
             input_hash: String::new(),
+            unrecognized_functions: Vec::new(),
         };
 
         // Wall-clock guard: skipping the O(N²) helper means this call
@@ -1559,30 +1561,174 @@ mod tests {
     }
 
     #[test]
-    fn get_exc_table_offset_prev97_overflowed_oob_returns_zero() {
-        // Pre-validation behaviour pinned a defense-in-depth guard
-        // inside `get_exc_table_offset` that returned 0 when the
-        // PreV84/V84-V96 overflowed branch saw `large_off + 32 >
-        // buf.len()`. The parser-time `validate_function_regions` pass
-        // now catches the same shape one layer earlier via the strict
-        // `function_get_checked` API, surfacing
-        // `OverflowedHeaderOutOfBounds` before the inner guard is
-        // reached. This test pins the parse-time rejection; the inner
-        // guard itself is exercised directly by
+    fn prev97_overflowed_oob_is_recovered_and_marked_unrecognized() {
+        // A function whose `overflowed` flag is set but whose composed
+        // large-header offset is out of bounds is recovered-and-marked
+        // rather than hard-failing the whole parse: `parse` succeeds,
+        // the broken index is recorded in `unrecognized_functions`, and
+        // the inner `get_exc_table_offset` guard remains exercised
+        // directly by
         // `get_exc_table_offset_prev97_inner_guard_returns_zero_on_oob`
         // below (manual HbcFile construction bypasses validate, so the
-        // PreV84/V84-V96 large_off+32 guard fires).
+        // PreV84/V84-V96 large_off+32 guard fires there).
         let bytes = build_prev97_overflowed_oob_hbc();
-        match HbcFile::parse(&bytes, None) {
-            Err(crate::error::HermesError::OverflowedHeaderOutOfBounds {
-                func_idx, ..
-            }) => {
-                assert_eq!(func_idx, 0);
-            }
-            Ok(_) => {
-                panic!("parse must reject the OOB-overflow fixture via the strict API")
-            }
-            Err(other) => panic!("unexpected parse error: {other:?}"),
+        let hbc = HbcFile::parse(&bytes, None)
+            .expect("OOB-overflow fixture must parse Ok with the function marked unrecognized");
+        assert!(
+            hbc.is_function_unrecognized(0),
+            "the OOB-overflow function must be marked unrecognized"
+        );
+        assert_eq!(
+            hbc.unrecognized_functions().len(),
+            1,
+            "exactly one function is unrecognized"
+        );
+        assert_eq!(hbc.unrecognized_functions()[0].func_idx, 0);
+    }
+
+    /// Build a v96 HBC blob with TWO functions: f0 valid (small-header,
+    /// body inside the bytecode region, a single `Ret` instruction) and
+    /// f1 OOB-overflow (overflow flag set, `info_offset` so large that
+    /// `large_off` is far past `buf.len()`). Returns the blob plus the
+    /// `(offset, size)` of f0's body so the test can assert it decodes.
+    fn build_v96_one_valid_one_oob_overflow() -> (Vec<u8>, u32, u32) {
+        // Find the v96 `Ret` opcode byte + its instruction size so the
+        // valid function's body decodes regardless of opcode-table
+        // re-numbering.
+        let names = crate::opcodes::get_version_names(96).expect("v96 names");
+        let (sizes, _, _) = crate::opcodes::get_version_tables(96).expect("v96 sizes");
+        let ret_idx = names
+            .iter()
+            .position(|&n| n == "Ret")
+            .expect("v96 table has Ret") as u8;
+        let ret_size = usize::from(sizes[usize::from(ret_idx)]);
+        assert!(ret_size >= 1, "Ret instruction size includes the opcode byte");
+
+        // Layout: 128B Header + 2×16B FunctionHeaders = bytecode region
+        // begins at 160. f0 body lands at 160.
+        let f0_offset: u32 = 160;
+        let f0_size: u32 = ret_size as u32;
+        let body_end = 160usize + ret_size;
+        let mut buf = vec![0u8; body_end];
+
+        // Magic + version 96.
+        buf[0..8].copy_from_slice(&0x1F1903C103BC1FC6u64.to_le_bytes());
+        buf[8..12].copy_from_slice(&96u32.to_le_bytes());
+        buf[32..36].copy_from_slice(&(body_end as u32).to_le_bytes());
+        // function_count @40 = 2.
+        buf[40..44].copy_from_slice(&2u32.to_le_bytes());
+
+        // f0 SmallFuncHeader @128: offset (bits 0..25) = 160,
+        // byte_size (bits 32..47) = ret_size, flags @byte 15 = 0.
+        let f0_word0 = f0_offset & 0x01FF_FFFF;
+        buf[128..132].copy_from_slice(&f0_word0.to_le_bytes());
+        let f0_word1 = f0_size & 0x7FFF;
+        buf[132..136].copy_from_slice(&f0_word1.to_le_bytes());
+        // byte 143 (entry[15]) flags = 0 (no overflow).
+
+        // f1 SmallFuncHeader @144: info_offset (bits 64..89, word 2 low
+        // 25 bits) = 256 → large_off = 256<<16 = 16_777_216 ≫ buf.len();
+        // flags @byte 15 (absolute 144+15 = 159) bit 5 set = overflowed.
+        buf[144 + 8..144 + 12].copy_from_slice(&256u32.to_le_bytes());
+        buf[159] = 0x20;
+
+        // f0 body @160: a single `Ret` instruction (opcode byte + zeroed
+        // operands of width ret_size-1). Zeros are a valid Reg8 operand.
+        buf[160] = ret_idx;
+
+        (buf, f0_offset, f0_size)
+    }
+
+    /// Acceptance gate: a crafted HBC with one OOB-overflow function and
+    /// one valid function parses `Ok`; the broken function is marked
+    /// Unrecognized with the finding present; the valid function parses
+    /// and decodes normally; and the Unrecognized function exposes no
+    /// decoded body (true terminal — `decompile_one` surfaces the typed
+    /// Err without ever slicing+decoding at the fallback offset).
+    #[test]
+    fn one_oob_overflow_plus_one_valid_recovers_and_marks_only_the_broken() {
+        let _ = crate::finding::drain_findings_for_test();
+        let (bytes, f0_off, f0_size) = build_v96_one_valid_one_oob_overflow();
+
+        let hbc = HbcFile::parse(&bytes, None)
+            .expect("parse must succeed with the OOB-overflow function marked unrecognized");
+
+        // Only f1 is unrecognized; f0 is not.
+        assert!(!hbc.is_function_unrecognized(0), "f0 is valid");
+        assert!(hbc.is_function_unrecognized(1), "f1 is OOB-overflow");
+        assert_eq!(hbc.unrecognized_functions().len(), 1);
+        assert_eq!(hbc.unrecognized_functions()[0].func_idx, 1);
+        assert!(matches!(
+            hbc.unrecognized_functions()[0].reason,
+            crate::parser::UnrecognizedReason::OverflowedHeaderOutOfBounds { .. }
+        ));
+
+        // f0 resolves to its small-header offset/size and its body
+        // decodes cleanly.
+        let f0 = hbc.function_get(0);
+        assert_eq!(f0.offset, f0_off);
+        assert_eq!(f0.size, f0_size);
+        let body = &bytes[f0_off as usize..(f0_off + f0_size) as usize];
+        crate::decompile::decode::decode_function(body, hbc.opcode_version())
+            .expect("f0's body must decode normally");
+
+        // The finding reached the channel and is observable.
+        let findings = crate::finding::drain_findings_for_test();
+        let oob: Vec<_> = findings
+            .iter()
+            .filter(|f| {
+                matches!(
+                    f,
+                    crate::finding::HermesFinding::OverflowedHeaderOutOfBounds { func_idx, .. }
+                        if *func_idx == 1
+                )
+            })
+            .collect();
+        assert_eq!(
+            oob.len(),
+            1,
+            "exactly one OverflowedHeaderOutOfBounds finding for func 1, got {findings:?}"
+        );
+
+        // True terminal: decompiling the broken function surfaces a
+        // typed Err carrying the recorded reason — no decode at the
+        // fallback offset. (`decompile_function` is the public per-fn
+        // entry; it routes through `decompile_one`.)
+        let terminal = crate::decompile::decompile_function(&hbc, &bytes, 1, true);
+        assert!(
+            matches!(
+                terminal,
+                Err(crate::HermesError::OverflowedHeaderOutOfBounds { func_idx: 1, .. })
+            ),
+            "unrecognized function must be a terminal typed Err, got {terminal:?}"
+        );
+
+        // And the valid function still decompiles without error.
+        let ok = crate::decompile::decompile_function(&hbc, &bytes, 0, true);
+        assert!(ok.is_ok(), "valid function must decompile, got {ok:?}");
+    }
+
+    /// Emit honestly refuses a file carrying Unrecognized functions.
+    ///
+    /// The recover-and-mark parse tolerates an out-of-bounds overflow
+    /// header, but emit re-synthesizes the file header from IR, which
+    /// normalizes adversarial inconsistencies the tolerant parse
+    /// accepted — re-parsing the normalized bytes can interpret another
+    /// function's metadata differently and break the round-trip. Rather
+    /// than emit bytes that silently diverge on re-parse, emit reports
+    /// the IR as unrepresentable (a typed rejection, not corruption).
+    #[test]
+    fn emit_rejects_file_with_unrecognized_functions() {
+        let _ = crate::finding::drain_findings_for_test();
+        let (bytes, _, _) = build_v96_one_valid_one_oob_overflow();
+        let parsed = HbcFile::parse(&bytes, None).expect("parse Ok");
+        assert!(parsed.is_function_unrecognized(1));
+        match crate::emit::emit_hbc(&parsed) {
+            Err(crate::emit::HermesEmitError::UnrepresentableIR { .. }) => {}
+            other => panic!(
+                "emit must reject a file with Unrecognized functions as UnrepresentableIR, \
+                 got {other:?}"
+            ),
         }
     }
 
@@ -1665,6 +1811,7 @@ mod tests {
             bytecode_region: (144, 144),
             sections: Vec::new(),
             input_hash: String::new(),
+            unrecognized_functions: Vec::new(),
         };
         // Direct call: the inner guard at `large_off + 32 > buf.len()`
         // fires (16_777_216 + 32 > 144) and returns 0.

@@ -112,6 +112,12 @@ pub fn scan_parsed_with_mode(
     let mut closure_refs: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
 
     for fi in 0..hbc.function_count {
+        // Skip unrecognized functions: their lenient `function_get`
+        // offset is the untrusted small-header fallback, so decoding
+        // their body would route at an attacker-controllable position.
+        if hbc.is_function_unrecognized(fi) {
+            continue;
+        }
         let f = hbc.function_get(fi);
         #[allow(clippy::as_conversions, reason = "u32→usize is a widen on every project-supported target (32-bit-or-wider). The downstream `checked_add` + `end > data.len()` gates catch any subsequent overflow.")]
         let offset = f.offset as usize;

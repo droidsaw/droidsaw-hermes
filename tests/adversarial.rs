@@ -185,11 +185,10 @@ fn fuzz_ssa_0cfc3d8e2713_returns_invalid_exception_layout() {
                 | HermesError::FunctionBodyOutOfBytecodeRegion { .. }
                 | HermesError::FunctionBodyOverlap { .. }
                 | HermesError::ExceptionHandlerOutOfFunctionRange { .. }
-                | HermesError::OverflowedHeaderOutOfBounds { .. }
         ),
         "expected InvalidExceptionLayout | UnknownOpcode | TruncatedInstructionStream | \
          FunctionBodyOutOfBytecodeRegion | FunctionBodyOverlap | \
-         ExceptionHandlerOutOfFunctionRange | OverflowedHeaderOutOfBounds, got {err:?}"
+         ExceptionHandlerOutOfFunctionRange, got {err:?}"
     );
 }
 
@@ -295,11 +294,10 @@ fn fuzz_ssa_47d147c4c0f9_returns_count_exceeds_input() {
                 | HermesError::FunctionBodyOutOfBytecodeRegion { .. }
                 | HermesError::FunctionBodyOverlap { .. }
                 | HermesError::ExceptionHandlerOutOfFunctionRange { .. }
-                | HermesError::OverflowedHeaderOutOfBounds { .. }
         ),
         "expected CountExceedsInput | UnknownOpcode | TruncatedInstructionStream | \
          InconsistentDebugHeader | FunctionBodyOutOfBytecodeRegion | FunctionBodyOverlap | \
-         ExceptionHandlerOutOfFunctionRange | OverflowedHeaderOutOfBounds, got {err:?}"
+         ExceptionHandlerOutOfFunctionRange, got {err:?}"
     );
 }
 
@@ -326,11 +324,10 @@ fn fuzz_ssa_c54279df956b_returns_count_exceeds_input() {
                 | HermesError::FunctionBodyOutOfBytecodeRegion { .. }
                 | HermesError::FunctionBodyOverlap { .. }
                 | HermesError::ExceptionHandlerOutOfFunctionRange { .. }
-                | HermesError::OverflowedHeaderOutOfBounds { .. }
         ),
         "expected CountExceedsInput | UnknownOpcode | TruncatedInstructionStream | \
          InconsistentDebugHeader | FunctionBodyOutOfBytecodeRegion | FunctionBodyOverlap | \
-         ExceptionHandlerOutOfFunctionRange | OverflowedHeaderOutOfBounds, got {err:?}"
+         ExceptionHandlerOutOfFunctionRange, got {err:?}"
     );
 }
 
@@ -360,11 +357,10 @@ fn fuzz_ssa_ec54a00b120f_returns_count_exceeds_input() {
                 | HermesError::FunctionBodyOutOfBytecodeRegion { .. }
                 | HermesError::FunctionBodyOverlap { .. }
                 | HermesError::ExceptionHandlerOutOfFunctionRange { .. }
-                | HermesError::OverflowedHeaderOutOfBounds { .. }
         ),
         "expected CountExceedsInput | UnknownOpcode | TruncatedInstructionStream | \
          InconsistentDebugHeader | FunctionBodyOutOfBytecodeRegion | FunctionBodyOverlap | \
-         ExceptionHandlerOutOfFunctionRange | OverflowedHeaderOutOfBounds, got {err:?}"
+         ExceptionHandlerOutOfFunctionRange, got {err:?}"
     );
 }
 
@@ -391,11 +387,10 @@ fn fuzz_ssa_ff30d198a579_returns_count_exceeds_input() {
                 | HermesError::FunctionBodyOutOfBytecodeRegion { .. }
                 | HermesError::FunctionBodyOverlap { .. }
                 | HermesError::ExceptionHandlerOutOfFunctionRange { .. }
-                | HermesError::OverflowedHeaderOutOfBounds { .. }
         ),
         "expected CountExceedsInput | UnknownOpcode | TruncatedInstructionStream | \
          InconsistentDebugHeader | FunctionBodyOutOfBytecodeRegion | FunctionBodyOverlap | \
-         ExceptionHandlerOutOfFunctionRange | OverflowedHeaderOutOfBounds, got {err:?}"
+         ExceptionHandlerOutOfFunctionRange, got {err:?}"
     );
 }
 

@@ -239,6 +239,28 @@ pub enum HermesEmitError {
     InputTooShort { got: usize },
 }
 
+/// Refuse to emit a file that carries Unrecognized functions.
+///
+/// A file with Unrecognized functions parsed only because the
+/// recover-and-mark path tolerated an out-of-bounds overflow header.
+/// Emit re-synthesizes the file header from IR (file_length, and other
+/// header fields), which normalizes any adversarial inconsistency the
+/// tolerant parse accepted; re-parsing the normalized bytes can then
+/// interpret a *different* function's metadata (e.g. an exception
+/// table) differently, breaking the parse→emit→parse round-trip. Since
+/// the IR of such a file cannot be faithfully round-tripped, emit
+/// reports it as unrepresentable rather than producing bytes that
+/// silently diverge on re-parse.
+fn reject_if_unrecognized(file: &HbcFile<'_>) -> Result<(), HermesEmitError> {
+    if !file.unrecognized_functions().is_empty() {
+        return Err(HermesEmitError::UnrepresentableIR {
+            reason: "file contains functions whose headers could not be honestly resolved \
+                     (recover-and-mark); a faithful round-trip is not guaranteed",
+        });
+    }
+    Ok(())
+}
+
 /// Emit an HBC file from a parsed `HbcFile`.
 ///
 /// Target: `parser::HbcFile::parse(&emit_hbc(&f)?)?` produces an
@@ -256,6 +278,7 @@ pub fn emit_hbc(file: &HbcFile<'_>) -> Result<Vec<u8>, HermesEmitError> {
             got: file.version,
         });
     }
+    reject_if_unrecognized(file)?;
 
     let src = file.buf();
     if src.len() < HEADER_SIZE {
@@ -1064,6 +1087,7 @@ pub fn emit_hbc_v99(file: &HbcFile<'_>) -> Result<Vec<u8>, HermesEmitError> {
 /// typed error message on mismatched inputs.
 fn emit_hbc_v98_or_v99(file: &HbcFile<'_>) -> Result<Vec<u8>, HermesEmitError> {
     require_v98_or_v99(file)?;
+    reject_if_unrecognized(file)?;
 
     let src = file.buf();
     if src.len() < HEADER_SIZE {
@@ -1338,6 +1362,7 @@ pub fn emit_hbc_v84(file: &HbcFile<'_>) -> Result<Vec<u8>, HermesEmitError> {
             got: file.version,
         });
     }
+    reject_if_unrecognized(file)?;
 
     let src = file.buf();
     if src.len() < HEADER_SIZE {
@@ -1757,9 +1782,11 @@ mod tests {
         // Parse one of the non-v96 adversarial fixtures, confirm emit
         // rejects with VersionMismatch. The fixture is adversarial — it
         // can also trip the parser's function-region validation
-        // (`FunctionBodyOutOfBytecodeRegion`), in which case parse fails
-        // before emit sees it. Either rejection point preserves the
-        // "non-v96 input cannot reach v96 emit" invariant.
+        // (`FunctionBodyOutOfBytecodeRegion`, a hard-reject region
+        // violation distinct from the recover-and-mark overflow-OOB
+        // class), in which case parse fails before emit sees it. Either
+        // rejection point preserves the "non-v96 input cannot reach v96
+        // emit" invariant.
         let v93_fixture: &[u8] =
             include_bytes!("../tests/fixtures/adversarial/oom/fuzz_ssa/47d147c4c0f9.hbc");
         match HbcFile::parse(v93_fixture, None) {
@@ -1773,11 +1800,9 @@ mod tests {
                     other => panic!("expected VersionMismatch, got {other:?}"),
                 }
             }
-            Err(crate::HermesError::FunctionBodyOutOfBytecodeRegion { .. })
-            | Err(crate::HermesError::OverflowedHeaderOutOfBounds { .. }) => {
-                // Parse-time rejection: function-region validation or
-                // the strict overflow-header check caught the
-                // adversarial fixture before reaching emit.
+            Err(crate::HermesError::FunctionBodyOutOfBytecodeRegion { .. }) => {
+                // Parse-time rejection: function-region validation caught
+                // the adversarial fixture before reaching emit.
             }
             Err(other) => panic!("unexpected parse error: {other:?}"),
         }

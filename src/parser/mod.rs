@@ -129,6 +129,15 @@ pub struct HbcFile<'a> {
     /// Used by `decompile::decompile_function` to scope `diag::with_input_hash`
     /// so panics anywhere in the decompile pipeline land in the right bundle dir.
     input_hash: String,
+
+    /// Function indices whose metadata could not be honestly resolved
+    /// at parse time (currently: overflow-large-header out of bounds).
+    /// Sorted ascending by `func_idx`, deduped. Empty for well-formed
+    /// files. Additive analysis metadata — never consulted by emit, so
+    /// the wire form is unchanged. Consumers check
+    /// [`HbcFile::is_function_unrecognized`] and render the marker
+    /// instead of decoding the body at the untrusted fallback offset.
+    unrecognized_functions: Vec<UnrecognizedFunction>,
 }
 
 /// String data returned from the parser.
@@ -153,6 +162,42 @@ pub struct FunctionData {
     /// `hermes/include/hermes/VMLayouts/sh_stack_frame_layout.h`).
     /// 0 means "not available" (empty returns, pre-v97 small headers).
     pub frame_size: u32,
+}
+
+/// A function index whose metadata could not be honestly resolved at
+/// parse time. Recorded in [`HbcFile::unrecognized_functions`] as a
+/// terminal marker: the function is excluded from region validation
+/// and its body is never decoded at the untrusted small-header
+/// fallback offset. Consumers query [`HbcFile::is_function_unrecognized`]
+/// and render the marker instead of trusting the resolved
+/// `FunctionData.offset`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnrecognizedFunction {
+    /// The function index that could not be resolved.
+    pub func_idx: u32,
+    /// Why the function was marked unrecognized.
+    pub reason: UnrecognizedReason,
+}
+
+/// The reason a function index was marked unrecognized at parse time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UnrecognizedReason {
+    /// The `overflowed` flag was set but the composed large-header
+    /// offset satisfies
+    /// `large_off + LARGE_FUNCTION_HEADER_SIZE > buf.len()` (or
+    /// `large_off` itself overflows `u64` on composition). The
+    /// large-header cannot be read, and the small-header fallback
+    /// offset is attacker-controllable, so the function body cannot be
+    /// honestly located. See
+    /// [`crate::error::HermesError::OverflowedHeaderOutOfBounds`].
+    OverflowedHeaderOutOfBounds {
+        /// The declared large-header offset (verbatim from the composed
+        /// small-header bitfields).
+        large_off: u64,
+        /// The HBC buffer length at the time of the OOB check.
+        buf_len: usize,
+    },
 }
 
 /// CJS module entry.
@@ -573,7 +618,7 @@ impl<'a> HbcFile<'a> {
             format!("{:016x}", h.finish())
         };
         let hash_for_scope = input_hash.clone();
-        let file = droidsaw_common::diag::with_input_hash(&hash_for_scope, move || {
+        let mut file = droidsaw_common::diag::with_input_hash(&hash_for_scope, move || {
             Self::parse_inner(buf, input_hash)
         })?;
         // Structural validation pass: every function's `(offset, size)`
@@ -609,7 +654,17 @@ impl<'a> HbcFile<'a> {
     /// Zero-size functions are skipped from the overlap check (they
     /// have no body bytes to clash with siblings) but still pass the
     /// region containment check trivially (`offset + 0 <= region_end`).
-    fn validate_function_regions(&self) -> Result<(), HermesError> {
+    ///
+    /// A function whose `overflowed` flag is set but whose composed
+    /// large-header offset is out of bounds
+    /// (`OverflowedHeaderOutOfBounds`) is **not** a hard-reject: the
+    /// index is recorded in [`HbcFile::unrecognized_functions`], the
+    /// [`crate::finding::HermesFinding::OverflowedHeaderOutOfBounds`]
+    /// finding is emitted, and the function is excluded from `spans`
+    /// (never region-checked, never overlap-checked, never decoded).
+    /// Valid functions in the same file parse normally. All other
+    /// validation errors remain hard-rejects.
+    fn validate_function_regions(&mut self) -> Result<(), HermesError> {
         let (region_start, region_end) = self.bytecode_region;
 
         // Pass 1: per-function region containment + collect (idx, offset, size)
@@ -626,6 +681,10 @@ impl<'a> HbcFile<'a> {
         // where `function_get` returns the all-zero default (e.g.,
         // malformed overflow-large-header fallback) without weakening
         // the H-3 attack-class closure.
+        // Recover-and-mark side-set built during Pass 1. Collected into
+        // a local first (the strict accessor borrows `&self`), then
+        // assigned to `self.unrecognized_functions` after the loop.
+        let mut unrecognized: Vec<UnrecognizedFunction> = Vec::new();
         let mut spans: Vec<(u32, u32, u32)> = Vec::with_capacity(self.function_count as usize);
         for idx in 0..self.function_count {
             // Use the strict `function_get_checked` API rather than the
@@ -637,8 +696,38 @@ impl<'a> HbcFile<'a> {
             // overflow function pass region validation while the
             // consumer's decode path is poisoned. The strict API
             // surfaces the OOB-overflow shape as a typed
-            // `OverflowedHeaderOutOfBounds` Err which propagates here.
-            let f = self.function_get_checked(idx)?;
+            // `OverflowedHeaderOutOfBounds` Err.
+            //
+            // On that one error class we recover-and-mark: record the
+            // index as unrecognized, emit the finding, and `continue`
+            // (excluding it from `spans` so it is never region-checked,
+            // overlap-checked, or decoded). Every other error class
+            // remains a hard-reject via `?`.
+            let f = match self.function_get_checked(idx) {
+                Ok(f) => f,
+                Err(HermesError::OverflowedHeaderOutOfBounds {
+                    func_idx,
+                    large_off,
+                    buf_len,
+                }) => {
+                    unrecognized.push(UnrecognizedFunction {
+                        func_idx,
+                        reason: UnrecognizedReason::OverflowedHeaderOutOfBounds {
+                            large_off,
+                            buf_len,
+                        },
+                    });
+                    crate::finding::emit_finding(
+                        crate::finding::HermesFinding::OverflowedHeaderOutOfBounds {
+                            func_idx,
+                            large_off,
+                            buf_len,
+                        },
+                    );
+                    continue;
+                }
+                Err(other) => return Err(other),
+            };
             if f.size == 0 {
                 continue;
             }
@@ -734,12 +823,18 @@ impl<'a> HbcFile<'a> {
         // Pass 3: per-function exception handler bounds.
         // `function_exception_count` returns the count for one function;
         // handler offsets are function-relative bytecode-stream offsets.
-        // Strict-API `function_get_checked` matches Pass 1: any function
-        // whose overflow large-header is OOB would have failed Pass 1
-        // already and never reached here, so the `?` is structurally
-        // unreachable but kept for code-symmetry and as defense-in-depth.
+        // Strict-API `function_get_checked` matches Pass 1: an
+        // OOB-overflow function recovered in Pass 1 still surfaces
+        // `OverflowedHeaderOutOfBounds` here (its small-header is
+        // unchanged), so skip those indices — they were already
+        // excluded from `spans` and have no trustworthy `f.size` to
+        // bound handlers against. Every other error class hard-rejects.
         for idx in 0..self.function_count {
-            let f = self.function_get_checked(idx)?;
+            let f = match self.function_get_checked(idx) {
+                Ok(f) => f,
+                Err(HermesError::OverflowedHeaderOutOfBounds { .. }) => continue,
+                Err(other) => return Err(other),
+            };
             let count = self.function_exception_count(idx);
             for h_idx in 0..count {
                 let eh = self.function_exception_get(idx, h_idx);
@@ -763,6 +858,11 @@ impl<'a> HbcFile<'a> {
             }
         }
 
+        // Commit the recover-and-mark side-set. `unrecognized` is built
+        // in ascending `idx` order by the Pass 1 loop and carries no
+        // duplicates (one entry per index), so the sorted/deduped
+        // contract on `unrecognized_functions` holds by construction.
+        self.unrecognized_functions = unrecognized;
         Ok(())
     }
 
@@ -1222,6 +1322,7 @@ impl<'a> HbcFile<'a> {
             bytecode_region,
             sections,
             input_hash,
+            unrecognized_functions: Vec::new(),
         })
     }
 
@@ -1235,6 +1336,32 @@ impl<'a> HbcFile<'a> {
     /// Get the raw buffer.
     pub fn buf(&self) -> &[u8] {
         self.buf
+    }
+
+    /// Function indices whose metadata could not be honestly resolved
+    /// at parse time. Sorted ascending by `func_idx`, deduped. Empty
+    /// for well-formed files. See [`UnrecognizedFunction`].
+    pub fn unrecognized_functions(&self) -> &[UnrecognizedFunction] {
+        &self.unrecognized_functions
+    }
+
+    /// Whether the function at `idx` was marked unrecognized at parse
+    /// time. Consumers gate body decode on this: an unrecognized
+    /// function exposes no trustworthy `(offset, size)`, so its body
+    /// must not be decoded at the resolved fallback offset.
+    ///
+    /// `unrecognized_functions` is sorted ascending by `func_idx`
+    /// (built that way by `validate_function_regions`'s `0..count`
+    /// Pass-1 loop), so membership is `O(log N)` via binary search.
+    /// This is load-bearing: full-bundle decompile/scan call this in a
+    /// `0..function_count` loop, so a linear scan would make those paths
+    /// `O(N²)` on a crafted all-OOB-overflow file. The common case
+    /// (empty side-set) short-circuits in the binary search trivially.
+    #[must_use]
+    pub fn is_function_unrecognized(&self, idx: u32) -> bool {
+        self.unrecognized_functions
+            .binary_search_by_key(&idx, |u| u.func_idx)
+            .is_ok()
     }
 
     /// Get a string from the string table.
@@ -3279,6 +3406,7 @@ mod function_region_bounds_tests {
             bytecode_region: (u32::try_from(fh_end).unwrap_or(u32::MAX), region_end),
             sections: Vec::new(),
             input_hash: String::new(),
+            unrecognized_functions: Vec::new(),
         }
     }
 
@@ -3307,7 +3435,7 @@ mod function_region_bounds_tests {
         let mut buf = vec![0u8; 200];
         let hdr = pack_v97_small_header(0, 10);
         buf[128..128 + 12].copy_from_slice(&hdr);
-        let hbc = minimal_hbc(&buf, 1, 12);
+        let mut hbc = minimal_hbc(&buf, 1, 12);
         match hbc.validate_function_regions() {
             Err(HermesError::FunctionBodyOutOfBytecodeRegion {
                 func_idx,
@@ -3334,7 +3462,7 @@ mod function_region_bounds_tests {
         let mut buf = vec![0u8; 200];
         let hdr = pack_v97_small_header(195, 10);
         buf[128..128 + 12].copy_from_slice(&hdr);
-        let hbc = minimal_hbc(&buf, 1, 12);
+        let mut hbc = minimal_hbc(&buf, 1, 12);
         match hbc.validate_function_regions() {
             Err(HermesError::FunctionBodyOutOfBytecodeRegion { offset, size, .. }) => {
                 assert_eq!(offset, 195);
@@ -3356,7 +3484,7 @@ mod function_region_bounds_tests {
         let h1 = pack_v97_small_header(175, 10);
         buf[128..128 + 12].copy_from_slice(&h0);
         buf[140..140 + 12].copy_from_slice(&h1);
-        let hbc = minimal_hbc(&buf, 2, 12);
+        let mut hbc = minimal_hbc(&buf, 2, 12);
         match hbc.validate_function_regions() {
             Err(HermesError::FunctionBodyOverlap {
                 a_idx,
@@ -3392,7 +3520,7 @@ mod function_region_bounds_tests {
         let h1 = pack_v97_small_header(170, 15);
         buf[128..128 + 12].copy_from_slice(&h0);
         buf[140..140 + 12].copy_from_slice(&h1);
-        let hbc = minimal_hbc(&buf, 2, 12);
+        let mut hbc = minimal_hbc(&buf, 2, 12);
         match hbc.validate_function_regions() {
             Err(HermesError::FunctionBodyOverlap {
                 a_idx,
@@ -3422,7 +3550,7 @@ mod function_region_bounds_tests {
         let h1 = pack_v97_small_header(170, 10);
         buf[128..128 + 12].copy_from_slice(&h0);
         buf[140..140 + 12].copy_from_slice(&h1);
-        let hbc = minimal_hbc(&buf, 2, 12);
+        let mut hbc = minimal_hbc(&buf, 2, 12);
         assert!(hbc.validate_function_regions().is_ok());
     }
 
@@ -3442,7 +3570,7 @@ mod function_region_bounds_tests {
         let h1 = pack_v97_small_header(160, 9);
         buf[128..128 + 12].copy_from_slice(&h0);
         buf[140..140 + 12].copy_from_slice(&h1);
-        let hbc = minimal_hbc(&buf, 2, 12);
+        let mut hbc = minimal_hbc(&buf, 2, 12);
         assert!(
             hbc.validate_function_regions().is_ok(),
             "single exact-duplicate function-info pair must be accepted as nop-stub dedup",
@@ -3469,7 +3597,7 @@ mod function_region_bounds_tests {
             let pos = 128 + (i as usize) * 12;
             buf[pos..pos + 12].copy_from_slice(&hdr);
         }
-        let hbc = minimal_hbc(&buf, FUNC_COUNT, 12);
+        let mut hbc = minimal_hbc(&buf, FUNC_COUNT, 12);
         assert!(
             hbc.validate_function_regions().is_ok(),
             "{FUNC_COUNT} exact-duplicate function-info entries must be accepted (cap is {MAX_FUNCTION_BODY_DEDUPS})",
@@ -3487,7 +3615,7 @@ mod function_region_bounds_tests {
         let h1 = pack_v97_small_header(160, 15);
         buf[128..128 + 12].copy_from_slice(&h0);
         buf[140..140 + 12].copy_from_slice(&h1);
-        let hbc = minimal_hbc(&buf, 2, 12);
+        let mut hbc = minimal_hbc(&buf, 2, 12);
         match hbc.validate_function_regions() {
             Err(HermesError::FunctionBodyOverlap { a_size, b_size, .. }) => {
                 assert!(
@@ -3509,7 +3637,7 @@ mod function_region_bounds_tests {
         let mut buf = vec![0u8; 200];
         let hdr = pack_v97_small_header(0, 0);
         buf[128..128 + 12].copy_from_slice(&hdr);
-        let hbc = minimal_hbc(&buf, 1, 12);
+        let mut hbc = minimal_hbc(&buf, 1, 12);
         assert!(hbc.validate_function_regions().is_ok());
     }
 
@@ -3521,7 +3649,7 @@ mod function_region_bounds_tests {
         let mut buf = vec![0u8; 200];
         let hdr = pack_v97_small_header(190, 10);
         buf[128..128 + 12].copy_from_slice(&hdr);
-        let hbc = minimal_hbc(&buf, 1, 12);
+        let mut hbc = minimal_hbc(&buf, 1, 12);
         assert!(hbc.validate_function_regions().is_ok());
     }
 
@@ -3551,7 +3679,7 @@ mod function_region_bounds_tests {
         buf[204..208].copy_from_slice(&0u32.to_le_bytes()); // start
         buf[208..212].copy_from_slice(&10u32.to_le_bytes()); // end
         buf[212..216].copy_from_slice(&30u32.to_le_bytes()); // target (>= fn.size=20)
-        let hbc = minimal_hbc(&buf, 1, 12);
+        let mut hbc = minimal_hbc(&buf, 1, 12);
         // We don't have a clean way to influence `get_exc_table_offset`
         // without restructuring; verify the parser-side check via direct
         // ExceptionHandlerData inspection rather than via exc table
