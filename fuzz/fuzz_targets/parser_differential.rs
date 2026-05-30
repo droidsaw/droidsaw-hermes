@@ -24,7 +24,7 @@ use droidsaw_hermes::parser_oracle::naive_parse_hbc;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    let prod = HbcFile::parse(data);
+    let prod = HbcFile::parse(data, None);
     let oracle = naive_parse_hbc(data);
 
     match (&prod, &oracle) {
