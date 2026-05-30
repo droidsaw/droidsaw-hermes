@@ -108,6 +108,7 @@ pub enum CfgOracleError {
 // Return:                "Ret"
 // Throw (block-ending):  "Throw"
 // Unreachable:           "Unreachable"
+// Generator resume:      "SaveGenerator"  "SaveGeneratorLong"
 // ORACLE-OPCODE-LOCKSTEP-END
 //
 // These predicates enumerate the CF-affecting opcode categories covered by
@@ -117,6 +118,18 @@ pub enum CfgOracleError {
 
 fn oracle_is_uncond_jump(name: &str) -> bool {
     name == "Jmp" || name == "JmpLong"
+}
+
+/// Returns true for any instruction whose first `Addr` operand is a genuine
+/// block leader (branch target). This includes unconditional/conditional
+/// branches AND `SaveGenerator`/`SaveGeneratorLong`, whose first operand is
+/// the generator resume label. Used only for leader-set Rule 2 — NOT for
+/// terminator classification (SaveGenerator falls through; no CFG edge is added).
+fn oracle_has_branch_target(name: &str) -> bool {
+    oracle_is_uncond_jump(name)
+        || oracle_is_cond_branch(name)
+        || name == "SaveGenerator"
+        || name == "SaveGeneratorLong"
 }
 
 fn oracle_is_cond_branch(name: &str) -> bool {
@@ -250,7 +263,10 @@ pub fn naive_cfg(
         }
 
         // Rule 2: branch targets are leaders — only if instruction-aligned.
-        if (oracle_is_uncond_jump(name) || oracle_is_cond_branch(name))
+        // Includes SaveGenerator/SaveGeneratorLong: their first Addr operand is the
+        // generator resume label and is a genuine block leader. These instructions
+        // are NOT terminators (they fall through); only the leader is inserted here.
+        if oracle_has_branch_target(name)
             && let Some(t) = branch_target(inst)
         {
             insert_if_instr!(leaders, t);
@@ -1100,6 +1116,107 @@ mod tests {
         assert_eq!(oracle.edges, prod_shape.edges,
             "two-handler case: oracle must agree with production; oracle={:?} prod={:?}",
             oracle.edges, prod_shape.edges);
+    }
+
+    // ── Regression test: SaveGenerator resume target is a block leader ─────────
+    // `SaveGenerator` (opcode 0x96) and `SaveGeneratorLong` (opcode 0x97) carry
+    // an `Addr` operand that is the generator resume label — a genuine block
+    // leader. They are NOT terminators: execution falls through to the next
+    // instruction. Rule 2 must insert the Addr target as a leader; no CFG edge
+    // is added (the edge-building pass emits FallThrough, which is correct).
+    //
+    // Differential: oracle leaders must equal production leaders after this fix.
+    #[test]
+    fn save_generator_resume_target_is_leader() {
+        // SaveGenerator at offset 0 (size 4): first operand = Addr(6) → resume label at offset 6.
+        // Add       at offset 4 (size 2): linear, falls through.
+        // Ret       at offset 6 (size 2): resume point / block leader.
+        let instructions = vec![
+            mock_inst(0, 4, 0x96, "SaveGenerator",     vec![Operand::Addr(6), Operand::Reg(0)]),
+            mock_inst(4, 2, 0x00, "Add",               vec![Operand::Reg(0)]),
+            mock_inst(6, 2, 0x5c, "Ret",               vec![Operand::Reg(0)]),
+        ];
+        let bytecodes = vec![0u8; 16];
+
+        let oracle = naive_cfg(&instructions, &[], &bytecodes).expect("oracle must not fail");
+
+        // The resume target (offset 6) must be a leader.
+        assert!(
+            oracle.leaders.contains(&6),
+            "SaveGenerator Addr target (offset 6) must be a leader; leaders={:?}",
+            oracle.leaders,
+        );
+        // SaveGenerator is NOT a terminator, so no block split at offset 4:
+        // the SaveGenerator and Add at offset 4 are in the same block (block 0).
+        assert!(
+            !oracle.leaders.contains(&4),
+            "offset 4 must NOT be a separate leader (SaveGenerator does not terminate block 0); leaders={:?}",
+            oracle.leaders,
+        );
+        // No edge from block-0 to the resume label — SaveGenerator is not a terminator.
+        let edge_to_resume: Vec<_> = oracle.edges.iter().filter(|(_, t, _)| *t == 6).collect();
+        // The only edge to 6 should come from the fall-through of block at offset 4 (Ret),
+        // which has no successors — so there are NO edges to 6 in a well-formed CFG.
+        // Specifically, block 0 must NOT have a Branch edge to 6.
+        let branch_from_0_to_6 = oracle.edges.contains(&(0, 6, EdgeKindOracle::Branch));
+        assert!(
+            !branch_from_0_to_6,
+            "SaveGenerator must NOT add a Branch edge to its resume target; edges={:?}",
+            oracle.edges,
+        );
+        let _ = edge_to_resume; // inspected above
+
+        // Differential: oracle leaders must equal production leaders.
+        let prod = Cfg::build(&instructions, &[], &bytecodes).expect("production Cfg::build");
+        let prod_shape = prod.to_shape();
+        assert_eq!(
+            oracle.leaders,
+            prod_shape.leaders,
+            "oracle leaders must equal production leaders; oracle={:?} prod={:?}",
+            oracle.leaders,
+            prod_shape.leaders,
+        );
+        assert_eq!(
+            oracle.edges,
+            prod_shape.edges,
+            "oracle edges must equal production edges; oracle={:?} prod={:?}",
+            oracle.edges,
+            prod_shape.edges,
+        );
+    }
+
+    // SaveGeneratorLong variant — same semantics, opcode 0x97.
+    #[test]
+    fn save_generator_long_resume_target_is_leader() {
+        let instructions = vec![
+            mock_inst(0, 4, 0x97, "SaveGeneratorLong", vec![Operand::Addr(6), Operand::Reg(0)]),
+            mock_inst(4, 2, 0x00, "Add",               vec![Operand::Reg(0)]),
+            mock_inst(6, 2, 0x5c, "Ret",               vec![Operand::Reg(0)]),
+        ];
+        let bytecodes = vec![0u8; 16];
+
+        let oracle = naive_cfg(&instructions, &[], &bytecodes).expect("oracle must not fail");
+        assert!(
+            oracle.leaders.contains(&6),
+            "SaveGeneratorLong Addr target (offset 6) must be a leader; leaders={:?}",
+            oracle.leaders,
+        );
+        let prod = Cfg::build(&instructions, &[], &bytecodes).expect("production Cfg::build");
+        let prod_shape = prod.to_shape();
+        assert_eq!(
+            oracle.leaders,
+            prod_shape.leaders,
+            "oracle leaders must equal production leaders; oracle={:?} prod={:?}",
+            oracle.leaders,
+            prod_shape.leaders,
+        );
+        assert_eq!(
+            oracle.edges,
+            prod_shape.edges,
+            "oracle edges must equal production edges; oracle={:?} prod={:?}",
+            oracle.edges,
+            prod_shape.edges,
+        );
     }
 
     mod synthetic_differential_proptests {

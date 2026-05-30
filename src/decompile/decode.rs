@@ -84,6 +84,7 @@ impl DecodedInst {
     // Return:                "Ret"
     // Throw (block-ending):  "Throw"
     // Unreachable:           "Unreachable"
+    // Generator resume:      "SaveGenerator"  "SaveGeneratorLong"
     // ORACLE-OPCODE-LOCKSTEP-END
 
     /// Is this a jump instruction?

@@ -1,0 +1,9 @@
+stage: cfg_differential (oracle/production leader-set divergence)
+divergence: production Cfg::build includes 9 extra leaders absent from oracle
+root cause: oracle Rule 2 gated on Jmp/J* only; SaveGenerator/SaveGeneratorLong
+            first Addr operand is a genuine resume label that production marks as
+            a leader via inst.branch_target() — oracle missed it
+verdict: ORACLE_BUG — production is correct
+fix: added oracle_has_branch_target predicate covering SaveGenerator/SaveGeneratorLong;
+     Rule 2 now inserts their Addr target as a leader (no edge added — not a terminator)
+repro: cargo fuzz run cfg_differential fuzz/crashes/cfg_differential/f5c390c76d4c
