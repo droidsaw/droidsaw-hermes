@@ -263,6 +263,32 @@ pub enum HermesFinding {
         /// shape is ever picked from a partial score.
         selection_budget_exhausted: bool,
     },
+
+    /// An exception-handler `(start, end, target)` triple read from a
+    /// function's resolved handler table falls outside the parent
+    /// function's bytecode range (`start < end && end <= fn_size &&
+    /// target < fn_size` violated). The function is recover-marked
+    /// unrecognized
+    /// ([`crate::parser::UnrecognizedReason::ExceptionHandlerOutOfFunctionRange`])
+    /// and never decoded; bundle parse continues. The typed-Err
+    /// counterpart
+    /// [`crate::error::HermesError::ExceptionHandlerOutOfFunctionRange`]
+    /// surfaces from per-function consumers (e.g. decompile) when they
+    /// touch the marked index.
+    ExceptionHandlerOutOfFunctionRange {
+        /// The function index whose handler tripped the bounds check.
+        func_idx: u32,
+        /// The handler index within the function's table (0-based).
+        handler_idx: u32,
+        /// Function-relative start of the try-region.
+        start: u32,
+        /// Function-relative end of the try-region.
+        end: u32,
+        /// Function-relative catch target.
+        target: u32,
+        /// The parent function's bytecode size (the bound violated).
+        fn_size: u32,
+    },
 }
 
 /// Maximum acceptable `function_exception_count` on a single function
@@ -545,6 +571,23 @@ pub fn findings_as_common(
                         } else {
                             "found no coherent shape"
                         }
+                    ),
+                ),
+                HermesFinding::ExceptionHandlerOutOfFunctionRange {
+                    func_idx,
+                    handler_idx,
+                    start,
+                    end,
+                    target,
+                    fn_size,
+                } => (
+                    "HERMES_EXCEPTION_HANDLER_OUT_OF_FUNCTION_RANGE",
+                    Severity::High,
+                    Confidence::Verified,
+                    format!(
+                        "function {func_idx} handler {handler_idx}: (start={start}, \
+                         end={end}, target={target}) outside function bytecode range \
+                         (size={fn_size}); function marked unrecognized"
                     ),
                 ),
             };

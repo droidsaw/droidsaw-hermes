@@ -317,6 +317,29 @@ pub enum UnrecognizedReason {
         /// composed small-header bitfields).
         large_off: u64,
     },
+
+    /// An exception-handler `(start, end, target)` triple in the
+    /// function's resolved handler table falls outside the parent
+    /// function's bytecode range (`start < end && end <= fn_size &&
+    /// target < fn_size` violated; offsets are function-relative).
+    /// The handler metadata cannot be trusted — a mis-aimed `target`
+    /// would synthesize a phantom catch block the runtime never
+    /// installs — so the function is terminal; the rest of the bundle
+    /// parses normally. Carries the first offending triple verbatim.
+    /// See
+    /// [`crate::error::HermesError::ExceptionHandlerOutOfFunctionRange`].
+    ExceptionHandlerOutOfFunctionRange {
+        /// The handler index within the function's table (0-based).
+        handler_idx: u32,
+        /// Function-relative start of the try-region.
+        start: u32,
+        /// Function-relative end of the try-region.
+        end: u32,
+        /// Function-relative catch target.
+        target: u32,
+        /// The parent function's bytecode size (the bound violated).
+        fn_size: u32,
+    },
 }
 
 /// CJS module entry.
@@ -616,6 +639,42 @@ impl SelectionScratch {
     }
 }
 
+/// Merge two `func_idx`-ascending, mutually disjoint
+/// [`UnrecognizedFunction`] vecs into one ascending vec. Inputs come
+/// from `validate_function_regions` Pass 1 and Pass 3, each built by
+/// an `0..function_count` loop pushing at most one entry per index;
+/// the linear merge preserves the sorted/deduped contract that
+/// `HbcFile::is_function_unrecognized`'s binary search relies on.
+fn merge_sorted_unrecognized(
+    a: Vec<UnrecognizedFunction>,
+    b: Vec<UnrecognizedFunction>,
+) -> Vec<UnrecognizedFunction> {
+    if a.is_empty() {
+        return b;
+    }
+    if b.is_empty() {
+        return a;
+    }
+    let mut out = Vec::with_capacity(a.len().saturating_add(b.len()));
+    let mut ia = a.into_iter().peekable();
+    let mut ib = b.into_iter().peekable();
+    loop {
+        match (ia.peek(), ib.peek()) {
+            (Some(x), Some(y)) => {
+                if x.func_idx <= y.func_idx {
+                    out.extend(ia.next());
+                } else {
+                    out.extend(ib.next());
+                }
+            }
+            (Some(_), None) => out.extend(ia.by_ref()),
+            (None, Some(_)) => out.extend(ib.by_ref()),
+            (None, None) => break,
+        }
+    }
+    out
+}
+
 pub(super) fn read_u16(buf: &[u8], offset: usize) -> u16 {
     buf.get(offset..)
         .and_then(<[u8]>::first_chunk::<2>)
@@ -815,8 +874,12 @@ impl<'a> HbcFile<'a> {
         // must lie within the bytecode region derived in `parse_inner`,
         // adjacent function bodies must not overlap, and per-function
         // exception handlers must lie within their function's bytecode
-        // range. Hard-rejects on first violation per the v1.0.0 closure
-        // (correctness > recovery on adversarial input).
+        // range. Bundle-level violations (region escape, body overlap,
+        // dedup overflow) hard-reject on first occurrence; violations
+        // confined to one function's metadata (broken overflow claim,
+        // out-of-range handler triple, ambiguous large-header layout)
+        // recover-and-mark the function unrecognized so the rest of
+        // the bundle stays honestly parseable.
         file.validate_function_regions()?;
         Ok(file)
     }
@@ -1196,7 +1259,8 @@ impl<'a> HbcFile<'a> {
     /// Validate every function's `(offset, size)` against the bytecode
     /// region derived from the section walk + non-overlap with sibling
     /// functions + per-handler bounds against the parent function's
-    /// bytecode size. Hard-rejects on first violation.
+    /// bytecode size. Bundle-level violations hard-reject on first
+    /// occurrence; per-function handler violations recover-and-mark.
     ///
     /// Returns:
     /// - `Err(HermesError::FunctionBodyOutOfBytecodeRegion)` when a
@@ -1209,9 +1273,16 @@ impl<'a> HbcFile<'a> {
     ///   [`MAX_FUNCTION_BODY_DEDUPS`] exact-duplicate function-info
     ///   pairs are observed (single dedups are accepted as a known
     ///   production-Hermes minifier pattern; many dedups is corruption).
-    /// - `Err(HermesError::ExceptionHandlerOutOfFunctionRange)` when an
-    ///   exception handler's `(start, end, target)` triple falls
-    ///   outside the parent function's bytecode size.
+    ///
+    /// An exception handler whose `(start, end, target)` triple falls
+    /// outside the parent function's bytecode size is **not** a
+    /// hard-reject: the damage is confined to one function's handler
+    /// metadata (the body span was already proven in-region and
+    /// non-overlapping), so the function is recover-marked
+    /// [`UnrecognizedReason::ExceptionHandlerOutOfFunctionRange`]
+    /// (terminal — never decoded), a
+    /// [`crate::finding::HermesFinding::ExceptionHandlerOutOfFunctionRange`]
+    /// finding is emitted, and the rest of the bundle parses normally.
     ///
     /// Zero-size functions are skipped from the overlap check (they
     /// have no body bytes to clash with siblings) but still pass the
@@ -1470,6 +1541,19 @@ impl<'a> HbcFile<'a> {
         // skip any index already in the `unrecognized` side-set: its
         // exception table is aliased and must never be range-checked
         // (the count/handlers it reads are double-claimed bytes).
+        //
+        // An out-of-range handler triple is recover-and-marked, not
+        // hard-rejected: the damage is confined to one function's
+        // handler metadata (the body span was already proven in-region
+        // and non-overlapping by Passes 1-2), so the offending
+        // function is marked unrecognized — terminal, never decoded —
+        // and every other function in the bundle stays honestly
+        // parseable. One corrupt table must not abort a whole
+        // production bundle. Pass-3 marks land in their own ascending
+        // vec and are sorted-merged with the Pass-1 set below (a
+        // Pass-3 index can precede a Pass-1 index, so appending would
+        // break the binary-search sort invariant).
+        let mut pass3_unrecognized: Vec<UnrecognizedFunction> = Vec::new();
         for idx in 0..self.function_count {
             // `unrecognized` is pushed in ascending func_idx order in Pass 1,
             // so membership is a binary_search (O(log n)) — not a linear scan
@@ -1501,23 +1585,42 @@ impl<'a> HbcFile<'a> {
                     && eh.end <= f.size
                     && eh.target < f.size;
                 if !in_range {
-                    return Err(HermesError::ExceptionHandlerOutOfFunctionRange {
+                    // First offending handler is recorded; the
+                    // function is terminal regardless of how many more
+                    // triples are malformed.
+                    pass3_unrecognized.push(UnrecognizedFunction {
                         func_idx: idx,
-                        handler_idx: h_idx,
-                        start: eh.start,
-                        end: eh.end,
-                        target: eh.target,
-                        fn_size: f.size,
+                        reason: UnrecognizedReason::ExceptionHandlerOutOfFunctionRange {
+                            handler_idx: h_idx,
+                            start: eh.start,
+                            end: eh.end,
+                            target: eh.target,
+                            fn_size: f.size,
+                        },
                     });
+                    crate::finding::emit_finding(
+                        crate::finding::HermesFinding::ExceptionHandlerOutOfFunctionRange {
+                            func_idx: idx,
+                            handler_idx: h_idx,
+                            start: eh.start,
+                            end: eh.end,
+                            target: eh.target,
+                            fn_size: f.size,
+                        },
+                    );
+                    break;
                 }
             }
         }
 
-        // Commit the recover-and-mark side-set. `unrecognized` is built
-        // in ascending `idx` order by the Pass 1 loop and carries no
-        // duplicates (one entry per index), so the sorted/deduped
-        // contract on `unrecognized_functions` holds by construction.
-        self.unrecognized_functions = unrecognized;
+        // Commit the recover-and-mark side-set. Both inputs are sorted
+        // ascending by construction (each pass iterates `0..count` and
+        // pushes at most one entry per index) and disjoint (Pass 3
+        // skips every Pass-1 member via the binary_search above), so a
+        // single linear merge preserves the sorted/deduped contract on
+        // `unrecognized_functions` that `is_function_unrecognized`'s
+        // binary search relies on.
+        self.unrecognized_functions = merge_sorted_unrecognized(unrecognized, pass3_unrecognized);
         Ok(())
     }
 
@@ -4585,11 +4688,13 @@ mod function_region_bounds_tests {
         assert!(hbc.validate_function_regions().is_ok());
     }
 
-    /// An exception handler with `target >= fn.size` trips
-    /// `ExceptionHandlerOutOfFunctionRange`. Mirrors the H-4 PoC where
-    /// `target=500` falls outside the 100-byte function. Note: EH
-    /// offsets are function-relative bytecode-stream offsets per
-    /// `cfg.rs:467-481` and `decode.rs:296-301`.
+    /// An exception handler with `target >= fn.size` recover-marks
+    /// the function `UnrecognizedReason::ExceptionHandlerOutOfFunctionRange`
+    /// (validation returns `Ok`; the function is terminal, the bundle
+    /// is not). Mirrors the H-4 PoC where `target=500` falls outside
+    /// the 100-byte function. Note: EH offsets are function-relative
+    /// bytecode-stream offsets per `cfg.rs:467-481` and
+    /// `decode.rs:296-301`.
     #[test]
     fn handler_target_past_function_size_rejects_out_of_function_range() {
         // Function 0: offset=150, size=20, hasException flag set.
@@ -4627,22 +4732,27 @@ mod function_region_bounds_tests {
             // adversarial fixtures.
             return;
         }
-        match hbc.validate_function_regions() {
-            Err(HermesError::ExceptionHandlerOutOfFunctionRange {
-                func_idx,
+        assert!(
+            hbc.validate_function_regions().is_ok(),
+            "out-of-range handler is contained per-function, not a bundle reject"
+        );
+        assert!(hbc.is_function_unrecognized(0));
+        assert_eq!(hbc.unrecognized_functions().len(), 1);
+        match hbc.unrecognized_functions()[0].reason {
+            crate::parser::UnrecognizedReason::ExceptionHandlerOutOfFunctionRange {
+                handler_idx,
                 start,
                 end,
                 target,
                 fn_size,
-                ..
-            }) => {
-                assert_eq!(func_idx, 0);
+            } => {
+                assert_eq!(handler_idx, 0);
                 assert_eq!(start, 0);
                 assert_eq!(end, 10);
                 assert_eq!(target, 30);
                 assert_eq!(fn_size, 20);
             }
-            other => panic!("expected ExceptionHandlerOutOfFunctionRange, got {other:?}"),
+            other => panic!("expected ExceptionHandlerOutOfFunctionRange mark, got {other:?}"),
         }
         // Suppress unused-import lint when the test bails early.
         let _ = FunctionData { name_id: 0, param_count: 0, offset: 0, size: 0, flags: 0, frame_size: 0 };

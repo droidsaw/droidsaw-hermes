@@ -586,6 +586,13 @@ pub enum HermesError {
     /// droidsaw's structurer would otherwise emit a try/catch that
     /// the runtime never installs (false-positive on "uses exception
     /// handling" detection rules).
+    ///
+    /// Parse-time containment: `validate_function_regions` recover-
+    /// marks the offending function
+    /// (`UnrecognizedReason::ExceptionHandlerOutOfFunctionRange`)
+    /// instead of failing the whole bundle; this typed Err surfaces
+    /// from per-function consumers (e.g. decompile) touching the
+    /// marked index.
     #[error(
         "function {func_idx} handler {handler_idx}: (start={start}, end={end}, target={target}) \
          outside function bytecode range (size={fn_size})"

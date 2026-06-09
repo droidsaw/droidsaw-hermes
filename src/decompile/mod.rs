@@ -237,6 +237,20 @@ fn decompile_one(
                     large_off,
                 }
             }
+            crate::parser::UnrecognizedReason::ExceptionHandlerOutOfFunctionRange {
+                handler_idx,
+                start,
+                end,
+                target,
+                fn_size,
+            } => crate::HermesError::ExceptionHandlerOutOfFunctionRange {
+                func_idx: func_id,
+                handler_idx,
+                start,
+                end,
+                target,
+                fn_size,
+            },
         });
     }
     let f = hbc.function_get(func_id);
