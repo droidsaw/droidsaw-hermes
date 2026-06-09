@@ -384,6 +384,32 @@ pub enum HermesError {
         exc_offset: u32,
     },
 
+    /// A version-98 late-form bundle's large-FunctionHeader layout
+    /// could not be selected: the overflowed-header population
+    /// validates under neither candidate shape (36-byte v99-era /
+    /// 40-byte CacheNewObject-era — the wire version does not
+    /// distinguish them), or under both with materially different
+    /// decodes. Decoding under a guessed shape would yield
+    /// plausible-but-wrong flags and exception tables, so the strict
+    /// `HbcFile::function_get_checked` surfaces this typed Err for
+    /// every overflowed function and `validate_function_regions`
+    /// recover-and-marks them unrecognized (bundle parse continues;
+    /// non-overflowed functions are unaffected). Bundle-level
+    /// population counts are recorded once on the
+    /// [`crate::finding::HermesFinding::V98LargeHeaderLayoutAmbiguous`]
+    /// finding channel.
+    #[error(
+        "function {func_idx}: v98-late large-header layout ambiguous — no coherent \
+         shape for the overflowed-header population (large_off={large_off:#x})"
+    )]
+    LargeHeaderLayoutAmbiguous {
+        /// The function index (overflowed; no honest large-header decode).
+        func_idx: u32,
+        /// The declared large-header offset (verbatim from the
+        /// composed small-header bitfields).
+        large_off: u64,
+    },
+
     /// HBC v98 form-disambiguation failed because both
     /// `BytecodeOptions`-byte positions (offset 108 for v98-early,
     /// 112 for v98-late) had reserved bits set (`& 0xF8 != 0`). With

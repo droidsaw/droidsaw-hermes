@@ -228,6 +228,41 @@ pub enum HermesFinding {
         /// Final pick (`true` → late-form, `false` → early-form).
         picked_late: bool,
     },
+
+    /// A version-98 late-form bundle's large-FunctionHeader layout
+    /// selection found no coherent shape: the overflowed-header
+    /// population validates under neither candidate
+    /// ([`crate::parser::LargeHeaderLayout`]) or under both with
+    /// materially different decodes — or the selection pass exhausted
+    /// its work budget before either could be proven (crafted bundles
+    /// can alias overlapping exception-table spans from many
+    /// headers). Every overflowed function is recover-marked
+    /// unrecognized
+    /// ([`crate::parser::UnrecognizedReason::LargeHeaderLayoutAmbiguous`]);
+    /// this finding is emitted ONCE per bundle with the population
+    /// counts (per-function emission would flood the channel — a real
+    /// bundle carries tens of thousands of overflowed functions).
+    V98LargeHeaderLayoutAmbiguous {
+        /// Overflowed functions scored by the selection pass (OOB /
+        /// synthesized-overlap headers are excluded — they are marked
+        /// unrecognized on their own reasons). Partial when
+        /// `selection_budget_exhausted`.
+        overflowed_scored: u32,
+        /// Scored functions violating the 36-byte (v99-era) shape.
+        violations_shape36: u32,
+        /// Scored functions violating the 40-byte (CacheNewObject-era)
+        /// shape.
+        violations_shape40: u32,
+        /// Scored functions whose decode differs between the two
+        /// shapes (only counted when both shapes were individually
+        /// violation-free for that function).
+        decode_disagreements: u32,
+        /// The selection pass ran out of triple-validation budget
+        /// before scoring the whole population; the counts above
+        /// cover only the functions scored before exhaustion, and no
+        /// shape is ever picked from a partial score.
+        selection_budget_exhausted: bool,
+    },
 }
 
 /// Maximum acceptable `function_exception_count` on a single function
@@ -486,6 +521,30 @@ pub fn findings_as_common(
                          (early_options=0x{early_options:02x}, late_options=0x{late_options:02x}, \
                          function_count={function_count}, debug_with={debug_with}, \
                          debug_without={debug_without}, picked_late={picked_late})"
+                    ),
+                ),
+                HermesFinding::V98LargeHeaderLayoutAmbiguous {
+                    overflowed_scored,
+                    violations_shape36,
+                    violations_shape40,
+                    decode_disagreements,
+                    selection_budget_exhausted,
+                } => (
+                    "HERMES_V98_LARGE_HEADER_LAYOUT_AMBIGUOUS",
+                    Severity::Medium,
+                    Confidence::Unverified,
+                    format!(
+                        "v98-late large-header layout selection {} \
+                         (overflowed_scored={overflowed_scored}, \
+                         violations_shape36={violations_shape36}, \
+                         violations_shape40={violations_shape40}, \
+                         decode_disagreements={decode_disagreements}); \
+                         all overflowed functions marked unrecognized",
+                        if *selection_budget_exhausted {
+                            "exhausted its work budget before a shape could be proven coherent"
+                        } else {
+                            "found no coherent shape"
+                        }
                     ),
                 ),
             };

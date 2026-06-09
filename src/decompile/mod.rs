@@ -231,6 +231,12 @@ fn decompile_one(
                 func_idx: func_id,
                 exc_offset,
             },
+            crate::parser::UnrecognizedReason::LargeHeaderLayoutAmbiguous { large_off } => {
+                crate::HermesError::LargeHeaderLayoutAmbiguous {
+                    func_idx: func_id,
+                    large_off,
+                }
+            }
         });
     }
     let f = hbc.function_get(func_id);

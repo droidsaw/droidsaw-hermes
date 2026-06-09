@@ -34,7 +34,69 @@ pub const MAX_FUNCTION_BODY_DEDUPS: u32 = 65535;
 /// is set. Named so the Kani harness at
 /// `proofs/function_get_overflow_oob.rs` can reason about the OOB
 /// predicate against a constant rather than an in-fn literal.
+///
+/// This is the **maximum** across the layout shapes in
+/// [`LargeHeaderLayout`] (40 = `Shape40`), so the shared OOB
+/// predicate is conservative for both shapes: any `large_off` that
+/// passes guarantees the flags byte and the full header span are
+/// readable under either candidate.
 pub(crate) const LARGE_FUNCTION_HEADER_SIZE: usize = 40;
+
+/// Large-FunctionHeader layout shapes for `HbcHeader::V98LateToV99`
+/// bundles. The wire version cannot distinguish them: hermes
+/// `static_h` toolchains changed the FunctionHeader layout repeatedly
+/// without bumping the bytecode version, so version-98 bundles ship
+/// with BOTH shapes.
+///
+/// Both shapes share the scalar prefix `offset`(+0) `paramCount`(+4)
+/// `loopDepth`(+8) `bytecodeSizeInBytes`(+12) `functionName`(+16)
+/// `numberRegCount`(+20) `nonPtrRegCount`(+24) `frameSize`(+28) and
+/// three cache bytes (read/write/private-name) at +32..+35. They
+/// diverge after byte 34:
+///
+/// - [`LargeHeaderLayout::Shape36`] — 36 bytes total: flags byte at
+///   `large_off + 35`, exception table at `align4(large_off + 36)`.
+///   Matches v99+ producers and v98 `static_h` builds after the
+///   CacheNewObject removal (2026-01).
+/// - [`LargeHeaderLayout::Shape40`] — 40 bytes total: a fourth cache
+///   byte (`numCacheNewObject`) at +35, flags at `large_off + 36`,
+///   3 pad bytes, exception table at `align4(large_off + 40)`.
+///   Matches v98 `static_h` builds from the CacheNewObject era
+///   (mid-2025 React Native toolchains).
+///
+/// For version-98 late-form bundles the parser selects ONE shape per
+/// bundle via population-coherence scoring
+/// (`HbcFile::select_v98_large_header_layout`); v99+ is pinned to
+/// `Shape36`. There is deliberately no per-function pick: a bundle
+/// whose overflowed-header population validates under neither shape
+/// (or materially under both) marks every overflowed function
+/// unrecognized instead of guessing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LargeHeaderLayout {
+    /// 36-byte large header: flags @ +35, exception table @ align4(+36).
+    Shape36,
+    /// 40-byte large header (`numCacheNewObject` @ +35): flags @ +36,
+    /// exception table @ align4(+40).
+    Shape40,
+}
+
+impl LargeHeaderLayout {
+    /// Total header size in bytes (`align4`-rounded by construction).
+    pub(crate) const fn header_size(self) -> u64 {
+        match self {
+            Self::Shape36 => 36,
+            Self::Shape40 => 40,
+        }
+    }
+
+    /// Byte offset of the `FunctionHeaderFlag` byte from `large_off`.
+    pub(crate) const fn flags_offset(self) -> u64 {
+        match self {
+            Self::Shape36 => 35,
+            Self::Shape40 => 36,
+        }
+    }
+}
 
 /// Parsed Hermes bytecode file.
 #[allow(dead_code, reason = "Header fields parsed for completeness; some used only in future commands")]
@@ -138,6 +200,17 @@ pub struct HbcFile<'a> {
     /// [`HbcFile::is_function_unrecognized`] and render the marker
     /// instead of decoding the body at the untrusted fallback offset.
     unrecognized_functions: Vec<UnrecognizedFunction>,
+
+    /// Large-header layout in effect for overflowed functions of
+    /// `HbcHeader::V98LateToV99` bundles. `Some(Shape36)` is the
+    /// initial value from `parse_inner` (v99+ stays pinned there);
+    /// for version-98 late-form bundles
+    /// `select_v98_large_header_layout` overwrites it with the
+    /// population-coherent shape, or `None` when no shape is coherent
+    /// (every overflowed function is then recover-marked unrecognized
+    /// by `validate_function_regions`). Never consulted for header
+    /// variants other than `V98LateToV99`.
+    large_header_layout: Option<LargeHeaderLayout>,
 }
 
 /// String data returned from the parser.
@@ -227,6 +300,22 @@ pub enum UnrecognizedReason {
     ExceptionTableOverlapsSynthesizedRegion {
         /// The resolved exception-table offset (`get_exc_table_offset`).
         exc_offset: u32,
+    },
+
+    /// The function is overflowed in a version-98 late-form bundle
+    /// whose large-header layout selection
+    /// (`HbcFile::select_v98_large_header_layout`) found no coherent
+    /// shape: the overflowed-header population validates under
+    /// neither [`LargeHeaderLayout`] candidate, or under both with
+    /// materially different decodes. Decoding under a guessed shape
+    /// would yield plausible-but-wrong flags / exception tables, so
+    /// every overflowed function in the bundle is marked unrecognized
+    /// instead. See
+    /// [`crate::error::HermesError::LargeHeaderLayoutAmbiguous`].
+    LargeHeaderLayoutAmbiguous {
+        /// The declared large-header offset (verbatim from the
+        /// composed small-header bitfields).
+        large_off: u64,
     },
 }
 
@@ -462,6 +551,71 @@ pub(super) fn read_u32(buf: &[u8], offset: usize) -> u32 {
         .map_or(0, |a| u32::from_le_bytes(*a))
 }
 
+/// Round `v` up to the next multiple of 4, saturating (a value near
+/// `u64::MAX` clamps instead of wrapping mid-align).
+pub(super) const fn align4_u64(v: u64) -> u64 {
+    v.saturating_add(3) & !3u64
+}
+
+/// Is `table` (an align4-rounded exception-table position) outside
+/// the runtime read domain? `HbcFile::get_exc_table_offset` returns
+/// table positions as `u32` and zero-sentinels any aligned position
+/// above `u32::MAX` ("no table"), so the layout-selection validator
+/// must reject exactly the same positions: a table accepted here but
+/// zero-sentineled at read time would let selection certify a shape
+/// whose tables the runtime treats as absent.
+fn exc_table_pos_outside_runtime_domain(table: u64) -> bool {
+    table > u64::from(u32::MAX)
+}
+
+/// Work budget for the v98-late layout-selection pass, in handler
+/// triples validated (or content-compared). Each `(start, end,
+/// target)` triple occupies 12 wire bytes and every scored table must
+/// lie inside the file (span-checked before any walk), so a bundle of
+/// `len` bytes physically stores at most `len / 12` triples. An
+/// honest serializer materializes each table once and the pass walks
+/// each distinct table offset at most once per candidate shape
+/// (memoized), keeping honest work within a small multiple of that
+/// capacity: 4× covers the two candidate shapes plus headroom for the
+/// wrong-shape candidate's ±4-shifted window reads over the same
+/// bytes. Crafted bundles that alias overlapping table spans from
+/// many distinct headers exhaust the budget and selection fails
+/// honest (ambiguous → every overflowed function recover-marked) —
+/// it never picks a shape from a partial score.
+fn selection_triple_budget(len: usize) -> u64 {
+    (u64::try_from(len).unwrap_or(u64::MAX) / 12).saturating_mul(4)
+}
+
+/// Memoization + work-budget state for one run of
+/// `HbcFile::select_v98_large_header_layout`. Both maps are keyed by
+/// byte offsets that adversarial inputs can freely alias across many
+/// function headers; the memos turn each alias after the first into a
+/// map lookup, and `budget` bounds the total triple work for whatever
+/// distinct offsets remain.
+struct SelectionScratch {
+    /// `large_off` → `(violates_shape36, violates_shape40,
+    /// decode_equal)` as computed by `HbcFile::score_large_header`.
+    per_off: std::collections::HashMap<u64, (bool, bool, bool)>,
+    /// Exception-table offset → validity summary as computed by
+    /// `HbcFile::exc_table_summary_uncached` (`None` = structurally
+    /// invalid for every parent; `Some(required)` = valid iff the
+    /// parent's `bytecodeSizeInBytes >= required`).
+    per_table: std::collections::HashMap<u64, Option<u32>>,
+    /// Remaining triple-validation budget; see
+    /// [`selection_triple_budget`].
+    budget: u64,
+}
+
+impl SelectionScratch {
+    fn new(budget: u64) -> Self {
+        Self {
+            per_off: std::collections::HashMap::new(),
+            per_table: std::collections::HashMap::new(),
+            budget,
+        }
+    }
+}
+
 pub(super) fn read_u16(buf: &[u8], offset: usize) -> u16 {
     buf.get(offset..)
         .and_then(<[u8]>::first_chunk::<2>)
@@ -651,6 +805,12 @@ impl<'a> HbcFile<'a> {
         let mut file = droidsaw_common::diag::with_input_hash(&hash_for_scope, move || {
             Self::parse_inner(buf, input_hash)
         })?;
+        // Bundle-level large-header layout selection for version-98
+        // late-form bundles (no-op for every other header variant).
+        // Must run before region validation: the validation passes
+        // read overflowed-function flags / exception tables through
+        // the selected layout.
+        file.select_v98_large_header_layout();
         // Structural validation pass: every function's `(offset, size)`
         // must lie within the bytecode region derived in `parse_inner`,
         // adjacent function bodies must not overlap, and per-function
@@ -659,6 +819,378 @@ impl<'a> HbcFile<'a> {
         // (correctness > recovery on adversarial input).
         file.validate_function_regions()?;
         Ok(file)
+    }
+
+    /// Select the large-FunctionHeader layout for a version-98
+    /// late-form bundle by whole-population coherence. No-op unless
+    /// the header variant is `V98LateToV99` **and** the wire version
+    /// is exactly 98 (v99+ producers postdate the CacheNewObject
+    /// removal and stay pinned to [`LargeHeaderLayout::Shape36`]).
+    ///
+    /// Every overflowed function's large header is decoded under both
+    /// candidate shapes; functions whose composed `large_off` is out
+    /// of bounds or overlaps a synthesized region are skipped (Pass 1
+    /// recover-marks them regardless, and double-claimed/unreadable
+    /// bytes carry no trustworthy layout evidence). A shape is
+    /// *coherent* iff zero scored functions violate it — see
+    /// [`HbcFile::large_header_shape_violation`] for the per-function
+    /// predicate. Decision, a deterministic pure function of the
+    /// input bytes:
+    ///
+    /// - exactly one coherent shape → that shape;
+    /// - both coherent and every scored function decodes
+    ///   byte-identically under both (flags byte + exception-table
+    ///   content; vacuously true at zero scored functions) →
+    ///   `Shape36` (the pre-existing default; the choice is
+    ///   unobservable);
+    /// - both coherent with any decode disagreement, or neither
+    ///   coherent → `None`: no honest decode exists, so
+    ///   `validate_function_regions` recover-marks every overflowed
+    ///   function [`UnrecognizedReason::LargeHeaderLayoutAmbiguous`]
+    ///   and a [`crate::finding::HermesFinding::V98LargeHeaderLayoutAmbiguous`]
+    ///   finding records the population counts. Never a per-function
+    ///   pick.
+    ///
+    /// Work bounds: scoring is memoized per `large_off` (functions
+    /// sharing one large header are scored once) and per exception-
+    /// table offset (headers whose candidate tables alias the same
+    /// bytes validate them once), and the whole pass runs under a
+    /// global triple-validation budget
+    /// ([`selection_triple_budget`]). Exhausting the budget aborts
+    /// selection into the same ambiguous fail-honest arm — a partial
+    /// population score proves nothing, so no shape is ever picked
+    /// from one.
+    fn select_v98_large_header_layout(&mut self) {
+        if !matches!(&self.header, crate::header::HbcHeader::V98LateToV99(_))
+            || self.version != 98
+        {
+            return;
+        }
+        let mut scratch = SelectionScratch::new(selection_triple_budget(self.buf.len()));
+        let mut scored: u32 = 0;
+        let mut violations36: u32 = 0;
+        let mut violations40: u32 = 0;
+        let mut disagreements: u32 = 0;
+        let mut budget_exhausted = false;
+        for idx in 0..self.function_count {
+            let Some(large_off) = self.overflowed_large_off_v98late(idx) else {
+                continue;
+            };
+            if Self::overflow_header_is_oob(large_off, self.buf.len())
+                || self.overflow_header_overlaps_synthesized(large_off)
+            {
+                continue;
+            }
+            scored = scored.saturating_add(1);
+            let Some((v36, v40, decode_eq)) = self.score_large_header(large_off, &mut scratch)
+            else {
+                budget_exhausted = true;
+                break;
+            };
+            if v36 {
+                violations36 = violations36.saturating_add(1);
+            }
+            if v40 {
+                violations40 = violations40.saturating_add(1);
+            }
+            if !v36 && !v40 && !decode_eq {
+                disagreements = disagreements.saturating_add(1);
+            }
+        }
+        let coherent36 = violations36 == 0;
+        let coherent40 = violations40 == 0;
+        self.large_header_layout = match (budget_exhausted, coherent36, coherent40) {
+            (false, true, false) => Some(LargeHeaderLayout::Shape36),
+            (false, false, true) => Some(LargeHeaderLayout::Shape40),
+            (false, true, true) if disagreements == 0 => Some(LargeHeaderLayout::Shape36),
+            _ => {
+                crate::finding::emit_finding(
+                    crate::finding::HermesFinding::V98LargeHeaderLayoutAmbiguous {
+                        overflowed_scored: scored,
+                        violations_shape36: violations36,
+                        violations_shape40: violations40,
+                        decode_disagreements: disagreements,
+                        selection_budget_exhausted: budget_exhausted,
+                    },
+                );
+                None
+            }
+        };
+    }
+
+    /// Score the large header at `large_off` under both candidate
+    /// shapes: `(violates_shape36, violates_shape40, decode_equal)`.
+    /// Memoized per `large_off` in `scratch` — the score is a pure
+    /// function of the bytes at that offset, and many small-header
+    /// entries can compose the same `large_off`.
+    ///
+    /// `decode_equal` is only meaningful when neither shape violates
+    /// (the only case the caller's disagreement tally reads it);
+    /// it is stored `true` otherwise.
+    ///
+    /// Returns `None` when the selection work budget ran out
+    /// mid-validation: a partial walk proves nothing, so the caller
+    /// must abandon selection as ambiguous rather than score with it.
+    fn score_large_header(
+        &self,
+        large_off: u64,
+        scratch: &mut SelectionScratch,
+    ) -> Option<(bool, bool, bool)> {
+        if let Some(&cached) = scratch.per_off.get(&large_off) {
+            return Some(cached);
+        }
+        let v36 =
+            self.large_header_shape_violation(large_off, LargeHeaderLayout::Shape36, scratch)?;
+        let v40 =
+            self.large_header_shape_violation(large_off, LargeHeaderLayout::Shape40, scratch)?;
+        let decode_eq = if !v36 && !v40 {
+            self.large_header_shapes_decode_equal(large_off, scratch)?
+        } else {
+            true
+        };
+        let result = (v36, v40, decode_eq);
+        scratch.per_off.insert(large_off, result);
+        Some(result)
+    }
+
+    /// The composed large-header offset of function `index` under the
+    /// `V98LateToV99` small-header bitfields, or `None` when the
+    /// function is not overflowed (or its small-header entry is
+    /// unreadable). Selection-pass helper; mirrors `function_get`'s
+    /// late-v98/v99 composition `(func_name << 24) | offset` with
+    /// fully checked arithmetic.
+    fn overflowed_large_off_v98late(&self, index: u32) -> Option<u64> {
+        let fh_size = self.func_header_size as usize;
+        let entry_off = self
+            .func_headers
+            .0
+            .checked_add((index as usize).checked_mul(fh_size)?)?;
+        let end = entry_off.checked_add(fh_size)?;
+        let entry = self.buf.get(entry_off..end)?;
+        let flags_byte = *entry.get(11)?;
+        if (flags_byte >> 5) & 1 == 0 {
+            return None;
+        }
+        let offset = read_bitfield(entry, 0, 25);
+        let func_name = read_bitfield(entry, 46, 8);
+        Some((u64::from(func_name) << 24) | u64::from(offset))
+    }
+
+    /// Does the large header at `large_off` violate `shape`?
+    ///
+    /// Violations (each empirically zero across the well-formed
+    /// population under the true layout, and present under the wrong
+    /// one):
+    /// - `prohibitInvoke == 3` in the flags byte (invalid encoding —
+    ///   only 0/1/2 are defined);
+    /// - the `overflowed` bit (bit 5) set in the flags byte (the
+    ///   large header is the overflow *target*; serializers never set
+    ///   it there);
+    /// - `hasExceptionHandler` set with an unreadable or out-of-range
+    ///   exception table: count word out of bounds, count above
+    ///   [`crate::finding::MAX_EXCEPTION_HANDLERS`], table span out
+    ///   of bounds, or any handler triple violating
+    ///   `start < end <= bytecodeSize && target < bytecodeSize`.
+    ///
+    /// Strict-mode rate, kind bits, and pad bytes are deliberately
+    /// not scored: they are not population-invariant across real
+    /// producers. The caller guarantees
+    /// `large_off + LARGE_FUNCTION_HEADER_SIZE <= buf.len()` (the
+    /// shared OOB predicate uses the max shape size), so the flags
+    /// byte is readable under both shapes; reads stay total anyway.
+    ///
+    /// Returns `None` when the selection work budget ran out during
+    /// the exception-table walk.
+    fn large_header_shape_violation(
+        &self,
+        large_off: u64,
+        shape: LargeHeaderLayout,
+        scratch: &mut SelectionScratch,
+    ) -> Option<bool> {
+        let Some(flags) = self.byte_at_u64(large_off.saturating_add(shape.flags_offset()))
+        else {
+            return Some(true);
+        };
+        if flags & 0x03 == 0x03 {
+            return Some(true);
+        }
+        if (flags >> 5) & 1 != 0 {
+            return Some(true);
+        }
+        if (flags >> 3) & 1 == 0 {
+            return Some(false);
+        }
+        // `bytecodeSizeInBytes` sits at `large_off + 12` in both
+        // shapes (the divergence starts after byte 34).
+        let Some(size_pos) = large_off.checked_add(12).and_then(|v| usize::try_from(v).ok())
+        else {
+            return Some(true);
+        };
+        let fn_size = read_u32(self.buf, size_pos);
+        let table = align4_u64(large_off.saturating_add(shape.header_size()));
+        Some(match self.exc_table_summary(table, scratch)? {
+            None => true,
+            Some(required_fn_size) => fn_size < required_fn_size,
+        })
+    }
+
+    /// Memoized [`HbcFile::exc_table_summary_uncached`]: candidate
+    /// exception tables are keyed by their (align4-rounded) offset,
+    /// not by the header that claims them, because many overflowed
+    /// headers can alias the same table bytes — every alias after the
+    /// first costs one map lookup instead of a triple walk.
+    ///
+    /// Outer `None` = selection work budget exhausted.
+    fn exc_table_summary(
+        &self,
+        table: u64,
+        scratch: &mut SelectionScratch,
+    ) -> Option<Option<u32>> {
+        if let Some(&summary) = scratch.per_table.get(&table) {
+            return Some(summary);
+        }
+        let summary = self.exc_table_summary_uncached(table, &mut scratch.budget)?;
+        scratch.per_table.insert(table, summary);
+        Some(summary)
+    }
+
+    /// Validity summary of the candidate exception table at `table`
+    /// (a u32 count word, then `count` × 12-byte `(start, end,
+    /// target)` triples):
+    ///
+    /// - `Some(None)` — structurally invalid under EVERY parent:
+    ///   position outside the runtime read domain, count word out of
+    ///   bounds, count above
+    ///   [`crate::finding::MAX_EXCEPTION_HANDLERS`], span out of
+    ///   bounds, a triple with `start >= end`, or a triple with
+    ///   `target == u32::MAX` (`target < fn_size` is unsatisfiable
+    ///   for a u32 `fn_size`).
+    /// - `Some(Some(required))` — structurally valid; the table
+    ///   validates exactly for parents whose `bytecodeSizeInBytes >=
+    ///   required`, since per triple `end <= fn_size && target <
+    ///   fn_size` ⇔ `fn_size >= max(end, target + 1)`. The summary is
+    ///   therefore a pure function of the table bytes and safely
+    ///   shared across headers with different `bytecodeSizeInBytes`.
+    /// - `None` — `budget` ran out mid-walk (one unit per triple).
+    fn exc_table_summary_uncached(&self, table: u64, budget: &mut u64) -> Option<Option<u32>> {
+        // Runtime read-domain parity: `get_exc_table_offset` returns
+        // table positions as u32 and zero-sentinels aligned positions
+        // above u32::MAX ("no table"), so the selection validator
+        // must reject the same positions — certifying a shape on a
+        // table the runtime reads as absent would split the two
+        // domains.
+        if exc_table_pos_outside_runtime_domain(table) {
+            return Some(None);
+        }
+        let Some(table_pos) = usize::try_from(table).ok() else {
+            return Some(None);
+        };
+        let Some(count_end) = table_pos.checked_add(4) else {
+            return Some(None);
+        };
+        if count_end > self.buf.len() {
+            return Some(None);
+        }
+        let count = read_u32(self.buf, table_pos);
+        if count > crate::finding::MAX_EXCEPTION_HANDLERS {
+            return Some(None);
+        }
+        let span = u64::from(count).saturating_mul(12).saturating_add(4);
+        match table.checked_add(span) {
+            Some(end) if end <= self.buf.len() as u64 => {}
+            _ => return Some(None),
+        }
+        let mut required: u32 = 0;
+        for h_idx in 0..count {
+            if *budget == 0 {
+                return None;
+            }
+            *budget = budget.saturating_sub(1);
+            let Some(h_off) = count_end.checked_add((h_idx as usize).saturating_mul(12))
+            else {
+                return Some(None);
+            };
+            let start = read_u32(self.buf, h_off);
+            let end = read_u32(self.buf, h_off.saturating_add(4));
+            let target = read_u32(self.buf, h_off.saturating_add(8));
+            if start >= end {
+                return Some(None);
+            }
+            let Some(target_floor) = target.checked_add(1) else {
+                return Some(None);
+            };
+            required = required.max(end).max(target_floor);
+        }
+        Some(Some(required))
+    }
+
+    /// Do the two candidate shapes decode the large header at
+    /// `large_off` byte-identically? The scalar prefix (bytes 0..35)
+    /// is shared by construction, so only the flags byte and — when
+    /// `hasExceptionHandler` is set — the exception-table content
+    /// (count + triples at the two table positions) can differ. Only
+    /// called when both shapes are individually violation-free, so
+    /// both tables are in-bounds and count-capped.
+    ///
+    /// Returns `None` when the selection work budget cannot cover the
+    /// table-content compare (charged one unit per compared triple,
+    /// same currency as the validation walks — the compare touches
+    /// the same 12-byte spans).
+    fn large_header_shapes_decode_equal(
+        &self,
+        large_off: u64,
+        scratch: &mut SelectionScratch,
+    ) -> Option<bool> {
+        let f36 = self.byte_at_u64(
+            large_off.saturating_add(LargeHeaderLayout::Shape36.flags_offset()),
+        );
+        let f40 = self.byte_at_u64(
+            large_off.saturating_add(LargeHeaderLayout::Shape40.flags_offset()),
+        );
+        let (Some(f36), Some(f40)) = (f36, f40) else {
+            return Some(false);
+        };
+        if f36 != f40 {
+            return Some(false);
+        }
+        if (f36 >> 3) & 1 == 0 {
+            return Some(true);
+        }
+        let t36 = align4_u64(
+            large_off.saturating_add(LargeHeaderLayout::Shape36.header_size()),
+        );
+        let t40 = align4_u64(
+            large_off.saturating_add(LargeHeaderLayout::Shape40.header_size()),
+        );
+        let (Ok(t36), Ok(t40)) = (usize::try_from(t36), usize::try_from(t40)) else {
+            return Some(false);
+        };
+        let c36 = read_u32(self.buf, t36);
+        let c40 = read_u32(self.buf, t40);
+        if c36 != c40 {
+            return Some(false);
+        }
+        let cost = u64::from(c36);
+        if scratch.budget < cost {
+            return None;
+        }
+        scratch.budget = scratch.budget.saturating_sub(cost);
+        // 12 bytes per (start, end, target) triple after the 4-byte
+        // count word; counts are equal and pre-capped by the caller's
+        // violation check.
+        let len = (c36 as usize).saturating_mul(12).saturating_add(4);
+        let (Some(e36), Some(e40)) = (t36.checked_add(len), t40.checked_add(len)) else {
+            return Some(false);
+        };
+        match (self.buf.get(t36..e36), self.buf.get(t40..e40)) {
+            (Some(a), Some(b)) => Some(a == b),
+            _ => Some(false),
+        }
+    }
+
+    /// Total byte read at a u64 position (`None` past `buf.len()`).
+    fn byte_at_u64(&self, pos: u64) -> Option<u8> {
+        self.buf.get(usize::try_from(pos).ok()?).copied()
     }
 
     /// Validate every function's `(offset, size)` against the bytecode
@@ -781,6 +1313,21 @@ impl<'a> HbcFile<'a> {
                             large_off,
                         },
                     );
+                    continue;
+                }
+                Err(HermesError::LargeHeaderLayoutAmbiguous { func_idx, large_off }) => {
+                    // Same recover-and-mark treatment: no honest
+                    // large-header decode exists for any overflowed
+                    // function of an ambiguous v98-late bundle. No
+                    // per-function finding here — the selection pass
+                    // already emitted one bundle-level
+                    // `V98LargeHeaderLayoutAmbiguous` finding with the
+                    // population counts (per-function emission would
+                    // flood the channel on a large bundle).
+                    unrecognized.push(UnrecognizedFunction {
+                        func_idx,
+                        reason: UnrecognizedReason::LargeHeaderLayoutAmbiguous { large_off },
+                    });
                     continue;
                 }
                 Err(other) => return Err(other),
@@ -937,7 +1484,8 @@ impl<'a> HbcFile<'a> {
             let f = match self.function_get_checked(idx) {
                 Ok(f) => f,
                 Err(HermesError::OverflowedHeaderOutOfBounds { .. })
-                | Err(HermesError::OverflowedHeaderOverlapsSynthesizedRegion { .. }) => {
+                | Err(HermesError::OverflowedHeaderOverlapsSynthesizedRegion { .. })
+                | Err(HermesError::LargeHeaderLayoutAmbiguous { .. }) => {
                     continue;
                 }
                 Err(other) => return Err(other),
@@ -1430,6 +1978,7 @@ impl<'a> HbcFile<'a> {
             sections,
             input_hash,
             unrecognized_functions: Vec::new(),
+            large_header_layout: Some(LargeHeaderLayout::Shape36),
         })
     }
 
@@ -1469,6 +2018,20 @@ impl<'a> HbcFile<'a> {
         self.unrecognized_functions
             .binary_search_by_key(&idx, |u| u.func_idx)
             .is_ok()
+    }
+
+    /// The large-FunctionHeader layout in effect for this bundle's
+    /// overflowed functions. `Some(Shape36)` for v99+ (pinned) and
+    /// for v98-late bundles whose coherence selection landed on the
+    /// v99 shape; `Some(Shape40)` for v98-late bundles from the
+    /// CacheNewObject era; `None` when selection found no coherent
+    /// shape (every overflowed function is then marked unrecognized).
+    /// Meaningless (always `Some(Shape36)`) for header variants other
+    /// than `V98LateToV99`, whose large headers use different
+    /// layouts keyed on the header variant itself.
+    #[must_use]
+    pub fn large_header_layout(&self) -> Option<LargeHeaderLayout> {
+        self.large_header_layout
     }
 
     /// Get a string from the string table.
@@ -2017,6 +2580,18 @@ impl<'a> HbcFile<'a> {
             };
 
             if !Self::overflow_header_is_oob(large_off, self.buf.len()) {
+                // v98-late bundles with no coherently-selected
+                // large-header layout have no honest large-header
+                // decode: `validate_function_regions` marks every
+                // overflowed function unrecognized, and this lenient
+                // accessor returns the inert all-zero `FunctionData`
+                // (size 0 — no body bytes are ever decoded under a
+                // guessed layout, and the small-header fallback offset
+                // is attacker-controllable). `None` is only ever set
+                // for `V98LateToV99` bundles.
+                let Some(layout) = self.large_header_layout else {
+                    return empty;
+                };
                 let lo = large_off as usize;
                 let mut field_off = 8usize;
                 if self.use_v99_func_header {
@@ -2032,6 +2607,14 @@ impl<'a> HbcFile<'a> {
                 field_off += 4;
                 // ReadCacheSize, WriteCacheSize, PrivateNameCacheSize (3 × u8)
                 field_off += 3;
+                // numCacheNewObject (1 byte) — present only in the
+                // v98-late 40-byte shape; pushes the flags byte to
+                // +36 and the exception table to align4(+40). Only
+                // ever selected for `V98LateToV99` bundles, whose
+                // `use_v99_func_header` path this is.
+                if layout == LargeHeaderLayout::Shape40 {
+                    field_off += 1;
+                }
                 // FunctionHeaderFlag (1 byte) — the real flags
                 let large_flags = if lo + field_off < self.buf.len() {
                     pack_flags(self.buf[lo + field_off])
@@ -2221,6 +2804,19 @@ impl<'a> HbcFile<'a> {
                     large_off,
                 },
             );
+        }
+        // v98-late bundle whose large-header layout selection found no
+        // coherent shape: there is no honest large-header decode for
+        // ANY overflowed function. Strict API surfaces the typed Err
+        // so `validate_function_regions` recover-and-marks; the
+        // lenient `function_get` returns the inert all-zero
+        // `FunctionData` for the same shape. `None` is only ever set
+        // for `V98LateToV99` bundles.
+        if self.large_header_layout.is_none() {
+            return Err(crate::error::HermesError::LargeHeaderLayoutAmbiguous {
+                func_idx: index,
+                large_off,
+            });
         }
         // In-bounds overflow case: the silent and strict APIs agree.
         Ok(self.function_get(index))
@@ -3421,7 +4017,20 @@ impl<'a> HbcFile<'a> {
                     };
                     let shift = if v99_layout { 24 } else { 16 };
                     let large_off = (u64::from(func_name) << shift) | u64::from(offset);
-                    let large_size = if v99_layout { 36u64 } else { 32 };
+                    // The exception table follows the large header,
+                    // whose size depends on the bundle-selected layout
+                    // for V98LateToV99 (36 or 40 bytes). An ambiguous
+                    // selection (`None`) has no honest table position:
+                    // return 0 — the same inert sentinel as the OOB
+                    // shape (callers bounds-check before reading).
+                    let large_size = if v99_layout {
+                        match self.large_header_layout {
+                            Some(layout) => layout.header_size(),
+                            None => return 0,
+                        }
+                    } else {
+                        32
+                    };
                     if large_off + large_size > self.buf.len() as u64 {
                         return 0;
                     }
@@ -3660,7 +4269,7 @@ mod function_region_bounds_tests {
     /// out at byte 128 (immediately after the 128-byte file header).
     /// `func_count` is the declared function count; the bytecode region
     /// is `[fh_end .. buf_end)`. All other counts are zeroed.
-    fn minimal_hbc<'a>(buf: &'a [u8], func_count: u32, func_header_size: u32) -> HbcFile<'a> {
+    pub(super) fn minimal_hbc<'a>(buf: &'a [u8], func_count: u32, func_header_size: u32) -> HbcFile<'a> {
         let fh_start = 128usize;
         let fh_size = (func_count as usize) * (func_header_size as usize);
         let fh_end = fh_start + fh_size;
@@ -3729,6 +4338,7 @@ mod function_region_bounds_tests {
             sections: Vec::new(),
             input_hash: String::new(),
             unrecognized_functions: Vec::new(),
+            large_header_layout: Some(crate::parser::LargeHeaderLayout::Shape36),
         }
     }
 
@@ -4036,5 +4646,118 @@ mod function_region_bounds_tests {
         }
         // Suppress unused-import lint when the test bails early.
         let _ = FunctionData { name_id: 0, param_count: 0, offset: 0, size: 0, flags: 0, frame_size: 0 };
+    }
+}
+
+#[cfg(test)]
+mod v98_selection_scratch_tests {
+    //! Unit tests for the v98-late layout-selection scratch state:
+    //! the runtime read-domain boundary on exception-table positions,
+    //! the per-`large_off` / per-table-offset memos, and the
+    //! triple-validation budget's fail-honest exhaustion signal.
+
+    use super::function_region_bounds_tests::minimal_hbc;
+    use super::{
+        exc_table_pos_outside_runtime_domain, selection_triple_budget, LargeHeaderLayout,
+        SelectionScratch,
+    };
+
+    /// The selection validator's accepted table-position domain must
+    /// equal the runtime read domain: `get_exc_table_offset` returns
+    /// table positions as u32 and zero-sentinels aligned positions
+    /// above `u32::MAX`, so the validator rejects exactly the
+    /// positions the runtime would read as "no table".
+    #[test]
+    fn exc_table_position_domain_boundary_is_u32_max() {
+        // Largest aligned position the runtime u32 can represent.
+        assert!(!exc_table_pos_outside_runtime_domain(0xFFFF_FFFC));
+        assert!(!exc_table_pos_outside_runtime_domain(u64::from(u32::MAX)));
+        // First position past the u32 domain — narrow_align4
+        // zero-sentinels these; the validator must reject them.
+        assert!(exc_table_pos_outside_runtime_domain(0x1_0000_0000));
+        assert!(exc_table_pos_outside_runtime_domain(u64::MAX));
+    }
+
+    /// A table position past the u32 domain is structurally invalid
+    /// (`Some(None)`) regardless of remaining budget — and consumes
+    /// none of it.
+    #[test]
+    fn exc_table_summary_rejects_position_past_u32_domain() {
+        let buf = vec![0u8; 256];
+        let hbc = minimal_hbc(&buf, 1, 12);
+        let mut budget = 100u64;
+        assert_eq!(
+            hbc.exc_table_summary_uncached(0x1_0000_0000, &mut budget),
+            Some(None)
+        );
+        assert_eq!(budget, 100);
+    }
+
+    /// Lay out one large header at `large_off = 150` in a 256-byte
+    /// buffer: Shape36 flags (byte 185) = 0x0c (strict +
+    /// hasExceptionHandler), Shape40 flags (byte 186) = 0x04 (strict
+    /// only), `bytecodeSizeInBytes` (bytes 162..166) = 16, and a
+    /// 1-triple exception table at align4(150 + 36) = 188 with
+    /// `(start, end, target)` = (0, 8, 4).
+    fn scoreable_buf() -> Vec<u8> {
+        let mut buf = vec![0u8; 256];
+        buf[185] = 0x0c;
+        buf[186] = 0x04;
+        buf[162..166].copy_from_slice(&16u32.to_le_bytes());
+        buf[188..192].copy_from_slice(&1u32.to_le_bytes()); // count
+        buf[192..196].copy_from_slice(&0u32.to_le_bytes()); // start
+        buf[196..200].copy_from_slice(&8u32.to_le_bytes()); // end
+        buf[200..204].copy_from_slice(&4u32.to_le_bytes()); // target
+        buf
+    }
+
+    /// Scoring the same `large_off` twice walks its table once: the
+    /// second call is a memo hit and spends no budget. The per-table
+    /// memo likewise answers repeat table lookups for free.
+    #[test]
+    fn repeated_large_off_is_memoized_and_spends_no_budget() {
+        let buf = scoreable_buf();
+        let hbc = minimal_hbc(&buf, 1, 12);
+        let mut scratch = SelectionScratch::new(10);
+
+        let first = hbc.score_large_header(150, &mut scratch);
+        // Shape36 walked its 1-triple table (valid: required 8 <=
+        // fn_size 16); Shape40 has no handler; flag bytes differ so
+        // the decode-equality check reports a disagreement.
+        assert_eq!(first, Some((false, false, false)));
+        assert_eq!(scratch.budget, 9);
+
+        let second = hbc.score_large_header(150, &mut scratch);
+        assert_eq!(second, first);
+        assert_eq!(scratch.budget, 9, "memo hit must not re-walk the table");
+
+        let summary = hbc.exc_table_summary(188, &mut scratch);
+        assert_eq!(summary, Some(Some(8)));
+        assert_eq!(scratch.budget, 9, "table memo hit must not re-walk");
+    }
+
+    /// An exhausted budget surfaces as `None` (fail honest) — never a
+    /// guessed score from a partial walk.
+    #[test]
+    fn exhausted_budget_fails_honest_not_partial() {
+        let buf = scoreable_buf();
+        let hbc = minimal_hbc(&buf, 1, 12);
+        let mut scratch = SelectionScratch::new(0);
+        assert_eq!(hbc.score_large_header(150, &mut scratch), None);
+        // The Shape36 violation predicate is where the walk died.
+        assert_eq!(
+            hbc.large_header_shape_violation(150, LargeHeaderLayout::Shape36, &mut scratch),
+            None
+        );
+    }
+
+    /// Budget formula pin: 4 triples of headroom per 12 wire bytes
+    /// (two candidate shapes x shifted-window slack), saturating.
+    #[test]
+    fn selection_budget_is_four_triples_per_twelve_bytes() {
+        assert_eq!(selection_triple_budget(0), 0);
+        assert_eq!(selection_triple_budget(11), 0);
+        assert_eq!(selection_triple_budget(12), 4);
+        assert_eq!(selection_triple_budget(5_495_604), 1_831_868);
     }
 }

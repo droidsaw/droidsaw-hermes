@@ -1398,6 +1398,7 @@ mod tests {
             sections: Vec::new(),
             input_hash: String::new(),
             unrecognized_functions: Vec::new(),
+            large_header_layout: Some(crate::parser::LargeHeaderLayout::Shape36),
         };
         assert_eq!(hbc.bigint_as_str(0), Some("123".to_string()));
         // Out-of-bounds index → None, no panic.
@@ -1489,6 +1490,7 @@ mod tests {
             sections: Vec::new(),
             input_hash: String::new(),
             unrecognized_functions: Vec::new(),
+            large_header_layout: Some(crate::parser::LargeHeaderLayout::Shape36),
         };
 
         // Wall-clock guard: skipping the O(N²) helper means this call
@@ -1812,6 +1814,7 @@ mod tests {
             sections: Vec::new(),
             input_hash: String::new(),
             unrecognized_functions: Vec::new(),
+            large_header_layout: Some(crate::parser::LargeHeaderLayout::Shape36),
         };
         // Direct call: the inner guard at `large_off + 32 > buf.len()`
         // fires (16_777_216 + 32 > 144) and returns 0.
