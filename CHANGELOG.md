@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-06-11
+
+### Added
+
+- Recover-and-mark containment for adversarial bundles: broken function
+  regions, exception tables overlapping synthesized regions, and overflow
+  large-headers overlapping synthesized regions are recorded as
+  `Unrecognized` rather than aborting the parse or corrupting the
+  emit round-trip.
+- Negative-property proptests for `HbcFile::parse` header counts.
+
+### Fixed
+
+- Decode the 40-byte v98-late large `FunctionHeader` via bundle-level layout
+  selection.
+- `cfg_oracle` marks `SaveGenerator` / `SaveGeneratorLong` Addr targets as
+  block leaders.
+- `parser_differential` fuzz target builds against the budget-arg
+  `HbcFile::parse` signature.
+
 ## [1.0.0] - 2026-05-25
 
 ### Added
